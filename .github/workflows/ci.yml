@@ -290,7 +290,14 @@ jobs:
           exit 1
       - name: Check the start-up sequence in the logs
         run: |
-          docker logs ofa-multi > multi.log 2>&1
+          # The job worker starts right after the API answers /readyz, so wait for its line instead of reading once.
+          for i in $(seq 1 30); do
+            docker logs ofa-multi > multi.log 2>&1
+            if grep -qF "started (concurrency" multi.log; then
+              break
+            fi
+            sleep 2
+          done
           grep -F "resync: orgs=2, created=2" multi.log
           grep -F "started (concurrency" multi.log
       - name: Sign in as the demo owner and call an authenticated endpoint
