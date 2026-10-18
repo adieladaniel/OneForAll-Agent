@@ -1,6 +1,30 @@
-# OneForAll Agent: an autonomous AI task worker
+<a id="top"></a>
 
-![CI](https://github.com/adieladaniel/OneForAll-Agent/actions/workflows/ci.yml/badge.svg)
+<p align="center">
+  <img src="docs/assets/banner.svg" alt="OneForAll Agent: give it a business task in plain words. It does the work in real systems, asks before it changes anything, and proves the result." width="100%">
+</p>
+
+<p align="center">
+  <a href="https://github.com/adieladaniel/OneForAll-Agent/actions/workflows/ci.yml"><img src="https://github.com/adieladaniel/OneForAll-Agent/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/adieladaniel/OneForAll-Agent/actions/workflows/security.yml"><img src="https://github.com/adieladaniel/OneForAll-Agent/actions/workflows/security.yml/badge.svg" alt="Security"></a>
+  <img src="https://img.shields.io/badge/Python-3.11-3776AB?logo=python&logoColor=white" alt="Python 3.11">
+  <img src="https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white" alt="FastAPI">
+  <img src="https://img.shields.io/badge/PostgreSQL-18-4169E1?logo=postgresql&logoColor=white" alt="PostgreSQL 18">
+  <img src="https://img.shields.io/badge/Playwright-Chromium-2EAD33?logo=googlechrome&logoColor=white" alt="Playwright with Chromium">
+  <img src="https://img.shields.io/badge/Gemini-free%20tier-8E75B2?logo=googlegemini&logoColor=white" alt="Gemini free tier">
+  <img src="https://img.shields.io/badge/Google%20Cloud%20Run-4285F4?logo=googlecloud&logoColor=white" alt="Google Cloud Run">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="License: MIT"></a>
+</p>
+
+<p align="center">
+  <a href="#1-setup-and-run"><b>Quick start</b></a> &nbsp;·&nbsp;
+  <a href="#how-it-works"><b>How it works</b></a> &nbsp;·&nbsp;
+  <a href="#11-evaluation"><b>Evaluation</b></a> &nbsp;·&nbsp;
+  <a href="#16-optional-hosting-it-on-google-cloud-run"><b>Deploy</b></a> &nbsp;·&nbsp;
+  <a href="#documentation"><b>Docs</b></a>
+</p>
+
+<br>
 
 Give it a business task in plain language, for example *"Find the latest invoice from Company X, extract the amount and due date, enter it into our internal system, and tell me once it is done."* It plans the work, drives a real browser and other tools, recovers from failures, asks for approval before changing anything, checks its own result with an independent verifier, and reports with evidence.
 
@@ -8,32 +32,137 @@ It runs against a simulated company (mail inbox, vendor billing portal, internal
 
 **v1** was a single-user prototype. **v2** (this version) keeps all of that and adds what a team would need to run it: organizations with users and roles, PostgreSQL storage, a job queue with worker processes, durable approvals answered by a second person, an encrypted credential vault, governed organization memory, metrics and logs, and a load test that measures it. Both modes ship in the same code: with no database configured it works like v1 (one local user, files, one run at a time).
 
-> Demo video: <add link>
+<!-- Demo video: <add link> -->
+
+## At a glance
+
+<table>
+  <tr>
+    <td align="center" width="25%"><img src="https://img.shields.io/badge/tests-676-4f46e5?style=for-the-badge" alt="tests: 676"><br><sub>automated tests, run with a scripted model and no API key</sub></td>
+    <td align="center" width="25%"><img src="https://img.shields.io/badge/soak%20runs-280%2F280-0f766e?style=for-the-badge" alt="soak runs: 280/280"><br><sub>succeeded and passed ground truth, through a worker kill and an API restart</sub></td>
+    <td align="center" width="25%"><img src="https://img.shields.io/badge/isolation%20leaks-0-0f766e?style=for-the-badge" alt="isolation leaks: 0"><br><sub>across 47,508 responses in the soak (about 118,000 scanned in all profiles)</sub></td>
+    <td align="center" width="25%"><img src="https://img.shields.io/badge/roles-5-4f46e5?style=for-the-badge" alt="roles: 5"><br><sub>viewer, approver, operator, admin, owner, with separation of duties</sub></td>
+  </tr>
+  <tr>
+    <td align="center" width="25%"><img src="https://img.shields.io/badge/eval%20scenarios-8-4f46e5?style=for-the-badge" alt="eval scenarios: 8"><br><sub>judged by deterministic ground-truth checkers instead of an LLM</sub></td>
+    <td align="center" width="25%"><img src="https://img.shields.io/badge/database-1-4169E1?style=for-the-badge" alt="database: 1"><br><sub>PostgreSQL 18 is the queue, the event bus, the rate limiter and the system of record</sub></td>
+    <td align="center" width="25%"><img src="https://img.shields.io/badge/agent%20frameworks-0-475569?style=for-the-badge" alt="agent frameworks: 0"><br><sub>no LangChain or similar; the runner is one file of about 700 lines</sub></td>
+    <td align="center" width="25%"><img src="https://img.shields.io/badge/modes-2-475569?style=for-the-badge" alt="modes: 2"><br><sub>single user with files, or multi-user with PostgreSQL, from the same code</sub></td>
+  </tr>
+</table>
+
+The load-test figures come from [docs/SCALING.md](docs/SCALING.md). They were measured on one machine with the deterministic stand-in model instead of Gemini, so they show the platform's structure (queueing, leases, approvals, recovery, isolation) and not model quality. The caveats are in [section 7](#7-scale-and-proof).
+
+## A real run
+
+These screenshots were captured from a local run of the headline task (find the latest invoice, enter it in the ERP, verify it), driven by the deterministic stand-in model (`LLM_PROVIDER=policy`) so that no Gemini quota was used.
+
+<p align="center">
+  <img src="docs/assets/screens/dashboard-run.png" alt="The dashboard while a run is in progress: the live timeline of tool calls, the live browser view, the plan and the working memory." width="100%"><br>
+  <sub><b>The dashboard mid-run.</b> Each tool call appears in the live timeline; the right column shows the browser, the plan and the working memory. Logins show as dots: the tool types the credential, and the model never sees it.</sub>
+</p>
+
+<table>
+  <tr>
+    <td width="50%" align="center">
+      <img src="docs/assets/screens/approval-card.png" alt="The approval card for the Save bill click, listing the exact values about to be submitted."><br>
+      <sub><b>The approval gate.</b> Before the write, the card shows the exact action and the form values.</sub>
+    </td>
+    <td width="50%" align="center">
+      <img src="docs/assets/screens/final-report.png" alt="The final report: the independent audit's passed checks, the agent's evidence, evidence screenshots and run statistics."><br>
+      <sub><b>The report.</b> The independent audit's checks, the agent's evidence, screenshots and run stats.</sub>
+    </td>
+  </tr>
+</table>
+
+## How it works
+
+```mermaid
+flowchart LR
+    U["Browser dashboard"] -->|"HTTPS + WebSocket"| A["API (FastAPI)"]
+    A -->|"SQL + LISTEN/NOTIFY"| P[("PostgreSQL: queue, state, events, vault, memory")]
+    P -->|"claim with SKIP LOCKED"| W["Workers + Chromium"]
+    W -->|"real browser, files, HTTP"| C["Simulated company: mail, portal, ERP"]
+```
+
+The API never runs a task. It writes a run into PostgreSQL, a worker claims it, and every step, event and checkpoint goes back to the same database. The architecture is described in [section 2](#2-architecture).
+
+One run, from the task to the report:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor O as Operator
+    participant R as Runner
+    participant M as Model
+    participant T as Tools
+    actor H as Approver
+    participant V as Verifier
+    O->>R: task in plain words
+    R->>M: goal, success criteria and plan
+    loop every turn
+        R->>M: prompt rebuilt from stored state
+        M-->>R: tool calls
+        R->>R: classify the risk of each call
+        opt write or irreversible action
+            R->>H: approval card with the exact values
+            H-->>R: approve or deny
+        end
+        R->>T: execute, retry transient errors only
+        T-->>R: observation
+    end
+    R->>V: claim of success
+    V->>T: re-check the real systems, read only
+    V-->>R: verdict with one check per criterion
+    R-->>O: report with evidence
+```
+
+**Plan.** The agent states the goal, checkable success criteria and a plan. **Act.** It uses a real browser, files and HTTP, and code (not the model) decides which calls need a human. **Verify.** A separate auditor with read-only tools re-observes the result, and a failed audit goes back into the loop. **Report.** A summary with evidence, the audit checks and screenshots.
+
+## Highlights
+
+<table>
+  <tr>
+    <td width="33%" valign="top">🛡️ <b>Approval gate</b><br>Risk is classified in code, not by the model. Writes and irreversible actions pause for a human, and a denial goes back to the agent as an observation.</td>
+    <td width="33%" valign="top">✅ <b>Independent verifier</b><br>A fresh-context auditor with read-only tools re-checks the real systems before a run is allowed to count as succeeded.</td>
+    <td width="33%" valign="top">🔐 <b>Credential vault</b><br>Credentials are encrypted at rest. The model sees names, tools use the values, and a redactor scrubs everything that is stored or sent.</td>
+  </tr>
+  <tr>
+    <td valign="top">♻️ <b>Job queue with resume</b><br>A <code>SKIP LOCKED</code> queue with leases and heartbeats. When a worker dies, its run resumes from the last checkpoint on another one.</td>
+    <td valign="top">🧠 <b>Org memory with a write gate</b><br>Shared how-to notes are written only after a run succeeded and its audit passed, and each note is screened first.</td>
+    <td valign="top">🏢 <b>Multi-tenant simulated company</b><br>Every organization gets its own mail, vendor portal and ERP, with deliberate traps and chaos flags that inject failures.</td>
+  </tr>
+  <tr>
+    <td valign="top">🔒 <b>Organization isolation</b><br>Another organization's run, file or approval answers 404, never 403, and the load test found no leak in about 118,000 scanned responses.</td>
+    <td valign="top">📈 <b>Observability</b><br>A live timeline, structured logs, Prometheus <code>/metrics</code>, <code>/healthz</code> and <code>/readyz</code>, and an admin System card.</td>
+    <td valign="top">🚀 <b>CI/CD to Cloud Run</b><br>GitHub Actions lint, test on PostgreSQL 18 and build the image, then deploy to staging and production with a smoke-tested traffic switch and a rollback workflow.</td>
+  </tr>
+</table>
 
 ## Contents
 
-1. [Setup and run](#1-setup-and-run)
-2. [Architecture](#2-architecture)
-3. [Design decisions and why](#3-design-decisions-and-why)
-4. [Security model](#4-security-model)
-5. [Reliability](#5-reliability)
-6. [Memory](#6-memory)
-7. [Scale and proof](#7-scale-and-proof)
-8. [Observability](#8-observability)
-9. [Demo](#9-demo)
-10. [Capability map](#10-capability-map)
-11. [Evaluation](#11-evaluation)
-12. [Testing](#12-testing)
-13. [Configuration reference](#13-configuration-reference)
-14. [Known limitations](#14-known-limitations)
-15. [What I would build next](#15-what-i-would-build-next)
-16. [Assumptions](#16-assumptions)
-17. [Models, APIs, frameworks and components used](#17-models-apis-frameworks-and-components-used)
-18. [Project structure](#18-project-structure)
-19. [Reference: simulated company](#19-reference-simulated-company)
-20. [Troubleshooting](#20-troubleshooting)
+| | |
+|---|---|
+| [1. Setup and run](#1-setup-and-run) | [11. Evaluation](#11-evaluation) |
+| [2. Architecture](#2-architecture) | [12. Testing](#12-testing) |
+| [3. Design decisions and why](#3-design-decisions-and-why) | [13. Configuration reference](#13-configuration-reference) |
+| [4. Security model](#4-security-model) | [14. Known limitations](#14-known-limitations) |
+| [5. Reliability](#5-reliability) | [15. What I would build next](#15-what-i-would-build-next) |
+| [6. Memory](#6-memory) | [16. Assumptions](#16-assumptions) |
+| [7. Scale and proof](#7-scale-and-proof) | [17. Models, APIs, frameworks and components used](#17-models-apis-frameworks-and-components-used) |
+| [8. Observability](#8-observability) | [18. Project structure](#18-project-structure) |
+| [9. Demo](#9-demo) | [19. Reference: simulated company](#19-reference-simulated-company) |
+| [10. Capability map](#10-capability-map) | [20. Troubleshooting](#20-troubleshooting) |
 
-More detail lives in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) (how it is built), [docs/MULTI_USER.md](docs/MULTI_USER.md) (operating the multi-user mode), [docs/DEPLOY.md](docs/DEPLOY.md) (the Cloud Run deployment), [docs/SCALING.md](docs/SCALING.md) (load-test results and limits) and [docs/DEMO_SCRIPT.md](docs/DEMO_SCRIPT.md) (the recording plan).
+### Documentation
+
+| Document | What it covers |
+|---|---|
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | How it is built |
+| [docs/MULTI_USER.md](docs/MULTI_USER.md) | Operating the multi-user mode |
+| [docs/DEPLOY.md](docs/DEPLOY.md) | The Cloud Run deployment |
+| [docs/SCALING.md](docs/SCALING.md) | Load-test results and limits |
+| [docs/DEMO_SCRIPT.md](docs/DEMO_SCRIPT.md) | The recording plan |
 
 ---
 
@@ -52,7 +181,8 @@ Requirements: Python 3.11+ (developed on 3.11.9 / Windows 11), about 400 MB of d
 | Approvals | in memory, wait forever, lost on restart | database rows with expiry, an inbox, separation of duties |
 | Selected by | `DATABASE_URL` empty (or `AUTH_MODE=file`) | `DATABASE_URL` set (`AUTH_MODE=auto` or `db`) |
 
-A `DATABASE_URL` in your `.env` switches `python run.py` to Mode 2 automatically. To stay in Mode 1 leave it out, or set `AUTH_MODE=file`.
+> [!NOTE]
+> A `DATABASE_URL` in your `.env` switches `python run.py` to Mode 2 automatically. To stay in Mode 1 leave it out, or set `AUTH_MODE=file`.
 
 ### 1.1 Install
 
@@ -120,6 +250,9 @@ Events print to the terminal, and approvals and questions are answered at the pr
 
 ### 1.4 Mode 2: multi-user (PostgreSQL)
 
+> [!WARNING]
+> The demo organizations, users and passwords exist for local development only. Choose your own demo password, and do not reuse it anywhere shared.
+
 1. **Install PostgreSQL** and note the `postgres` password (on Windows the EDB installer with the default port 5432 is fine). The bootstrap connects to the `postgres` maintenance database to create the application database, so the role needs the right to create databases.
 2. **Point `.env` at it:**
 
@@ -186,57 +319,85 @@ The `Dockerfile` builds one image with two shapes. Without a `DATABASE_URL` it i
 
 ### 2.1 The system (multi-user mode)
 
+```mermaid
+flowchart TD
+    B["Browser dashboard: runs, approvals inbox, memory, admin, credentials"]
+    A["API service: FastAPI, stateless, any number of copies (python -m worker.server)"]
+    P[("PostgreSQL: system of record, job queue, event bus")]
+    W["Worker service(s): K concurrent runs per process (python -m worker.jobs)"]
+    S["Multi-tenant simulated company: one isolated SQLite dataset per org, one process"]
+    B -->|"HTTPS + WebSocket, cookie session"| A
+    A -->|"SQL + LISTEN/NOTIFY"| P
+    W -->|"claim: SELECT FOR UPDATE SKIP LOCKED, lease + heartbeat"| P
+    P -.->|"NOTIFY wake-ups"| W
+    W -->|"one shared Chromium per worker, one isolated browser context per run"| S
 ```
-  Browser (dashboard: runs, approvals inbox, memory, admin, credentials)
-        |  HTTPS + WebSocket (cookie session)
-        v
-  API service  (FastAPI, stateless, any number of copies)          python -m worker.server
-        |  SQL + LISTEN/NOTIFY
-        v
-  PostgreSQL --- orgs, users, memberships, auth_sessions, login_attempts, runs, run_steps, run_facts,
-        ^         run_events, approvals, org_memory, credentials (encrypted), usage_events, llm_limits,
-        |         model_health, audit_log
-        |  claim: SELECT ... FOR UPDATE SKIP LOCKED, lease + heartbeat, NOTIFY wake-ups
-        |
-  Worker service(s)  (K concurrent runs per process)               python -m worker.jobs
-        |  one shared Chromium per worker, one isolated browser context per run
-        v
-  Multi-tenant simulated company (one isolated SQLite dataset per org, one process)
-```
+
+PostgreSQL holds: `orgs`, `users`, `memberships`, `auth_sessions`, `login_attempts`, `runs`, `run_steps`, `run_facts`, `run_events`, `approvals`, `org_memory`, `credentials` (encrypted), `usage_events`, `llm_limits`, `model_health` and `audit_log`.
 
 The API process never executes a run. A run is a row in PostgreSQL that moves through a state machine; workers claim it, execute it with the task-agnostic runner and write every step, event and checkpoint back to the same database. Postgres alone does the work that would otherwise need a broker and a cache: `FOR UPDATE SKIP LOCKED` is the job queue, `LISTEN/NOTIFY` carries live events and approval answers between processes, and `now()` is the one clock that leases, expiry and rate limits agree on (see [decision 3.14](#314-postgresql-alone-no-redis-no-broker)).
 
 ### 2.2 One agent run (the same in both modes)
 
+```mermaid
+flowchart TD
+    subgraph runner["AgentRunner (worker/agent/runner.py), one per task"]
+        ctx["context.py: build the prompt from state"]
+        llm["LLM: Gemini chain, Ollama or a stand-in"]
+        pol["policy.py: risk class + approval mode"]
+        gate{{"Human approval, via the broker"}}
+        exe["retry.py: run the tool, retry safe transient errors"]
+        st["state.py: record the step"]
+        gd["guards.py: budget, timeout, repetition"]
+        ver["verifier.py: read-only audit"]
+    end
+    ctx --> llm --> pol
+    pol -->|"approval needed"| gate --> exe
+    pol -->|"allowed"| exe
+    exe --> st --> gd
+    gd -->|"next turn"| ctx
+    gd -->|"finish with status success"| ver
+    ver -->|"audit failed, at most 2 correction rounds"| ctx
+    ver -->|"audit passed"| done(["Run succeeded: report and evidence"])
 ```
- +----------------------- AgentRunner (worker/agent/runner.py), one per task ------------------+
- |  context.py   rebuild the prompt from RunState every turn                                    |
- |  LLM          ResilientLLM -> Gemini (model chain) | Ollama | scripted/policy stand-ins      |
- |  policy.py    risk class + approval mode -> approval gate (a human, via the broker)          |
- |  retry.py     execute the tool, auto-retry transient errors that are safe to repeat          |
- |  state.py     Step / Fact / PlanItem recorded through a RunStore after every step            |
- |  guards.py    failure streak, repetition, step budget, timeout (human waits do not count)    |
- |  verifier.py  fresh-context auditor, read-only tools, verdict                                |
- |  redaction    vault secrets scrubbed from everything stored, emitted or sent to the model    |
- +---------------------------------------------------------------------------------------------+
-     Tools: browser_* (Playwright)  list/read/write_file  http_request  remember  recall
-            list_credentials  browser_fill_secret  update_plan  ask_user  finish
-```
+
+| Part | What it does |
+|---|---|
+| `context.py` | Rebuilds the prompt from `RunState` every turn |
+| LLM | `ResilientLLM` over Gemini (model chain), Ollama, or the scripted and policy stand-ins |
+| `policy.py` | Risk class plus approval mode lead to the approval gate (a human, via the broker) |
+| `retry.py` | Executes the tool and auto-retries transient errors that are safe to repeat |
+| `state.py` | `Step`, `Fact` and `PlanItem` recorded through a `RunStore` after every step |
+| `guards.py` | Failure streak, repetition, step budget, timeout (human waits do not count) |
+| `verifier.py` | Fresh-context auditor with read-only tools, and its verdict |
+| redaction | Vault secrets are scrubbed from everything stored, emitted or sent to the model |
+
+Tools: `browser_*` (Playwright), `list_files`, `read_file`, `write_file`, `http_request`, `remember`, `recall`, `list_credentials`, `browser_fill_secret`, `update_plan`, `ask_user`, `finish`.
 
 One turn of the loop: build context from state, ask the LLM for tool calls, classify each call's risk, ask a human if policy requires it, execute with transient-retry, record the step, check guards. When the agent calls `finish(status="success")`, a separate verifier re-checks the real systems before the run is allowed to count as succeeded.
 
 ### 2.3 Run lifecycle
 
-```
- operator: POST /api/runs                 a worker claims it (SKIP LOCKED, lease)
-        queued ---------------------------------------------> running <----------------------+
-          |  ^                                                   |   |                        |
- cancel   |  | worker lost (lease expired) or worker stopped:     |   +--> waiting_approval    |
-          v  | back to queued, resume_requested, resumes from    |   +--> waiting_user -------+
-     cancelled  the checkpoint (attempts counted)                +------> verifying ----------+
-                                                                          (failed audit: back to running,
-                                                                           at most 2 correction rounds)
-                                        final: succeeded | failed | needs_attention | cancelled
+```mermaid
+stateDiagram-v2
+    [*] --> queued: operator POST /api/runs
+    queued --> running: a worker claims it (SKIP LOCKED, lease)
+    queued --> cancelled: cancel
+    running --> waiting_approval: approval needed
+    waiting_approval --> running: answered
+    running --> waiting_user: question for a person
+    waiting_user --> running: answered
+    running --> verifying: agent claims success
+    verifying --> running: failed audit, at most 2 correction rounds
+    verifying --> succeeded: audit passed
+    running --> queued: worker lost or stopped, resume from the checkpoint
+    running --> failed
+    running --> needs_attention
+    running --> cancelled: cancel
+    succeeded --> [*]
+    failed --> [*]
+    needs_attention --> [*]
+    cancelled --> [*]
 ```
 
 - **queued:** inserted by the API in one transaction with the daily-quota check (advisory lock per org) and a `run_queued` event.
@@ -315,7 +476,7 @@ Each scenario ends with a Python checker ([evals/checkers.py](evals/checkers.py)
 
 ### 3.11 No agent framework
 
-No LangChain, LlamaIndex or similar. The runner is one file of about 650 lines and is the interesting part of the task: context policy, approval gating, guard behaviour, checkpoint/resume and verification all need precise control over when and how the model is called, and a framework would hide exactly those decisions. It also keeps the behaviour inspectable and the dependency list short.
+No LangChain, LlamaIndex or similar. The runner is one file of about 700 lines and is the interesting part of the task: context policy, approval gating, guard behaviour, checkpoint/resume and verification all need precise control over when and how the model is called, and a framework would hide exactly those decisions. It also keeps the behaviour inspectable and the dependency list short.
 
 ### 3.12 Gemini free tier behind a provider adapter
 
@@ -358,6 +519,12 @@ The point of the load test is to exercise the platform (queue, pool, vault, appr
 ---
 
 ## 4. Security model
+
+> [!IMPORTANT]
+> Secrets never reach the model. It sees credential names only, tools use the values inside the worker process, and a redactor scrubs everything that is stored, emitted or sent to the model (details in 4.4).
+
+> [!WARNING]
+> Multi-user mode is meant for a small trusted team behind its own network or login, and it has not been security-audited ([section 16](#16-assumptions)).
 
 ### 4.1 Roles and capabilities
 
@@ -443,6 +610,9 @@ Two different things, kept apart on purpose.
 
 [docs/SCALING.md](docs/SCALING.md) reports a real load test of the whole stack on one machine, with the method, the hardware, what limits throughput, the recovery tests, the bugs the test found, and the caveats. [scripts/loadtest.py](scripts/loadtest.py) reproduces it: it creates a throwaway database, starts the simulator, the API and N worker processes, then drives many organizations and users over real HTTP and WebSockets (operators submit runs, approvers of the same org approve after a human-like delay, viewers watch event streams and keep probing other orgs' runs). Success is judged from each org's ERP, not from what the agent says.
 
+> [!IMPORTANT]
+> Every run in this load test was executed by the deterministic policy stand-in, not by Gemini, on one machine. The caveats follow the numbers.
+
 Headline results, copied from the generated tables (all runs executed by the policy LLM, 14 to 16 model calls per run):
 
 | Profile | Orgs x users | Runs | Workers x slots | Succeeded and ground-truth pass | Throughput (runs/min) | End to end p50 / p95 (s) | Queue wait p50 / p95 (s) | Isolation: responses scanned / leaks | Cross-org probes not refused |
@@ -479,7 +649,7 @@ The full metric table and the scrape configuration are in [docs/ARCHITECTURE.md]
 
 ## 9. Demo
 
-> Demo video: <add link>
+<!-- Demo video: <add link> -->
 
 The recording shows, in order (shot-by-shot script, with an optional multi-user segment, in **[docs/DEMO_SCRIPT.md](docs/DEMO_SCRIPT.md)**):
 
@@ -547,32 +717,34 @@ python -m evals.run --parallel 3                     # 3 scenarios at once, each
 
 Other flags: `--headed`, `--provider gemini|ollama`, `--sim-url`, `--scenarios-dir`. The runner starts the simulator itself if nothing is listening on `SIM_BASE_URL`, resets it with each scenario's chaos flags, runs the real agent in-process with scripted approvals and answers, then judges the result from the simulator's data, never from the agent's claim: if the agent says `succeeded` while the ground truth disagrees, it is flagged as a **false success**. It needs a valid `GEMINI_API_KEY`, makes real LLM calls, and takes several minutes on the free tier. Results print as a table and are written to `evals/results/latest.md` (plus a timestamped JSON). Exit code: 0 all passed, 1 some failed, 2 setup problem.
 
-**Real-Gemini results (2026-10-16, free tier, 5 scenarios, one run each).** Full table: [evals/results/latest.md](evals/results/latest.md).
+**Real-Gemini results, free tier, one run per scenario.** Latest full table: [evals/results/latest.md](evals/results/latest.md). The same five invoice scenarios were measured three times; each round's traces drove the fixes for the next one.
 
-| Scenario | Agent said | Ground truth | Model the run ended on | What the trace shows |
+| Round | Passed | False successes | What the traces showed | What changed afterwards |
 |---|---|---|---|---|
-| `invoice_happy` | needs_attention | **PASS** | gemini-3.8-flash | The bill is fully correct, including the issue date. The run hit the 40-action step budget right after saving, because the agent wasted steps (it tried a guessed ERP password, re-read `credentials.json` three times, opened a stray workspace file). |
-| `invoice_server_error` | needs_attention | FAIL | gemini-2.5-flash-lite | It filled the form, met the injected 500 and the session expiry, and ran out of step budget while recovering. On the weakest model in the chain it also answered several turns without a tool call. No wrong or duplicate write. |
-| `invoice_ambiguous_vendor` | succeeded | **FALSE SUCCESS** | gemini-3.5-flash-lite | It picked "Company X Ltd" from the vendor dropdown without noticing "Company X Holdings", so it never asked. The bill it made is correct, but it should have asked, and the verifier did not flag the ambiguity. The eval harness caught it. |
-| `reply_payment_date` | succeeded | **PASS** | gemini-3.5-flash-lite | Correct reply with the due date. |
-| `deny_write` | needs_attention | **PASS** | gemini-3.5-flash-lite | The approval was denied, nothing changed, and the agent reported honestly. |
+| 2026-10-16 | 3 of 5 | 1 | `invoice_happy` saved a correct bill but ran out of its 40-step budget; `invoice_ambiguous_vendor` picked "Company X Ltd" without noticing "Company X Holdings" | Step budget 40 to 60; prompt rules on several matching entries, guessed logins and file re-reads |
+| 2026-10-17 | 0 of 5 | 2 | Three runs died on Gemini's `MALFORMED_FUNCTION_CALL` response, which the client treated as fatal and retried unchanged. The verifier passed two wrong results: it saw the competing Holdings invoice and passed anyway, and it never compared the mailbox with the portal | Malformed calls fail over to the next model, retry at a higher temperature, then reach the agent as a correction; two mandatory verifier checks, **Ambiguity** and **Completeness**, enforced by the verdict schema |
+| **2026-10-18** | **4 of 5** | 1 | `invoice_portal_missing`, `invoice_happy`, `invoice_duplicate` and `invoice_server_error` passed, most of them on the weakest model in the chain (`gemini-3.5-flash-lite`). `invoice_ambiguous_vendor` still entered Ltd's invoice without asking: the verifier listed both vendors but judged "no ambiguity" without looking up Holdings' invoices | The Ambiguity verdict is now decided by code: the verifier lists every matching entity and the candidate it found for each, and two or more candidates with no question asked is a failure (not yet re-measured) |
 
-**3 of 5 passed, 1 false success, and no wrong or duplicate writes in any run.** Four of the five runs finished on "lite" models, because the stronger free-tier models were overloaded (HTTP 503) or out of daily quota and the failover chain moved down the list; the results therefore partly measure free-tier model availability.
+Latest round in detail (2026-10-18):
 
-Changes made after this run, in response to the traces (not yet re-measured against the real model):
-- The step budget default is raised from 40 to 60 actions (`MAX_STEPS`); bookkeeping tools still do not count.
-- The worker prompt now tells the agent to check for several matching entries before picking from a list, dropdown or search result and to ask when nothing tells them apart; never to try a guessed login; and not to re-read a file whose content is already in working memory.
-- The verifier prompt now fails a check when the task's wording matches more than one entity and the worker neither asked nor justified its choice.
-- The stray file `workspace/report.txt`, left by an earlier test, is removed.
+| Scenario | Agent said | Ground truth | Steps | LLM calls | Approvals | Model the run ended on |
+|---|---|---|---|---|---|---|
+| `invoice_ambiguous_vendor` | succeeded | **FALSE SUCCESS** | 49 | 49 | 1/1 | gemini-3.7-flash |
+| `invoice_portal_missing` | succeeded | **PASS** | 40 | 51 | 1/1 | gemini-3.5-flash-lite |
+| `invoice_happy` | succeeded | **PASS** | 35 | 29 | 1/1 | gemini-3.5-flash-lite |
+| `invoice_duplicate` | succeeded | **PASS** (found the existing bill, wrote nothing) | 22 | 31 | 0/0 | gemini-3.5-flash-lite |
+| `invoice_server_error` | succeeded | **PASS** (recovered from the 500 and the expired session) | 59 | 41 | 2/2 | gemini-3.5-flash-lite |
 
-The other scenarios (`invoice_duplicate`, `invoice_portal_missing`, `month_backfill`) were not run against the real model in this pass because of the free-tier quota; do not read their absence as a pass. All scenarios are exercised by the unit tests with a scripted LLM, and the multi-user platform end to end by the load test with the policy LLM ([section 7](#7-scale-and-proof)). LLM behaviour varies between runs (`--repeat N` helps); treat any single table as a sample, not a guarantee.
+No round produced a wrong or duplicate write in the ERP; every failure was a missing question or an unfinished run, and the eval harness, which judges from the simulator's database instead of the agent's claim, flagged every false success. Most runs end on "lite" models because the stronger free-tier models are often overloaded (HTTP 503) or out of daily quota, so the numbers partly measure free-tier availability.
+
+`reply_payment_date` and `deny_write` passed in the 2026-10-16 round and were not re-run since; `month_backfill` has not been run against the real model yet because of the free-tier quota, so do not read its absence as a pass. All scenarios are exercised by the unit tests with a scripted LLM, and the multi-user platform end to end by the load test with the policy LLM ([section 7](#7-scale-and-proof)). LLM behaviour varies between runs (`--repeat N` helps); treat any single table as a sample, not a guarantee.
 
 ---
 
 ## 12. Testing
 
 ```bash
-python -m pytest -q            # 666 tests
+python -m pytest -q            # 676 tests
 ```
 
 The count comes from `python -m pytest -q --co` (collect only). No API key and no network are needed: the model is replaced by a scripted fake (or the policy stand-in). The suite takes a few minutes because many tests start Chromium or PostgreSQL.
@@ -586,6 +758,9 @@ What it covers: the simulator and its tenants; the tool framework, retry rules a
 
 GitHub Actions workflows live in [.github/workflows/](.github/workflows).
 
+<details>
+<summary><b>Workflows and automation, one row each</b></summary>
+
 | Workflow | When | What it does |
 |---|---|---|
 | `ci.yml` | every push, pull request, manual | **lint**: `ruff check .` and `actionlint` on the workflows. **test-fast**: the whole suite in file mode without a database (the 149 PostgreSQL tests skip by design), Chromium installed and cached, JUnit XML uploaded, pass/fail/skip counts in the job summary. **test-full** (after lint): the whole suite against a `postgres:18` service container; the job **fails if any database test was skipped**; it also runs `python -m worker.db migrate` and `check` on a scratch database. **docker**: builds the image (not pushed); starts it in the single-user shape and curls `/healthz`; then, against a `postgres:18` service, migrates and seeds with the image, starts it with `ROLE=all`, waits for `/readyz`, checks that the logs show the environment resync and the job worker, signs in as `owner@acme.test` through the real login endpoint and calls an authenticated endpoint. |
@@ -595,6 +770,8 @@ GitHub Actions workflows live in [.github/workflows/](.github/workflows).
 | `deploy.yml` | after `ci.yml` succeeds on `main`, manual | Builds and pushes the image and deploys it to staging, then production (see 12.2). Skipped until the repository variable `GCP_PROJECT_ID` is set. |
 | `rollback.yml` | manual | Sends an environment's traffic back to an earlier Cloud Run revision. |
 | `dependabot.yml` | weekly | Grouped minor/patch update PRs for pip and for the actions. |
+
+</details>
 
 The only secret any workflow reads is `GEMINI_API_KEY`, and only `evals.yml` does (Settings > Secrets and variables > Actions > New repository secret). The database password in the workflows is a throwaway value for a container that exists only for the job.
 
@@ -615,13 +792,18 @@ Recommended branch protection for `main` (Settings > Branches > Add rule): requi
 
 `deploy.yml` (with the reusable `_deploy-env.yml`) deploys what CI has just verified. After `ci.yml` succeeds on a push to `main` it builds the image once, pushes it to Artifact Registry tagged with the commit and deploys the same image by digest to **staging**, then to **production** once the reviewers of the `production` GitHub Environment approve. Each environment does the same things: run the database migration as a Cloud Run job, optionally seed the demo users (`seed_demo` on a manual run), deploy the new revision with no traffic, smoke test it on its own URL (`/readyz`, `/healthz`, `/`), and only then move traffic to it. A failed smoke test leaves traffic on the previous revision. `rollback.yml` moves traffic back to an earlier revision.
 
-Google Cloud is reached through Workload Identity Federation, so no service-account key is stored in GitHub. The one-time cloud setup is `bash deploy/gcp/setup.sh`; the GitHub variables, environments and approvals are listed in [docs/DEPLOY.md](docs/DEPLOY.md). Until `GCP_PROJECT_ID` is set the deploy jobs skip themselves, so pushes stay green. The workflows were checked with `actionlint` and shellcheck, but the cloud side has not been exercised against a real project yet.
+Google Cloud is reached through Workload Identity Federation, so no service-account key is stored in GitHub. The one-time cloud setup is `bash deploy/gcp/setup.sh`; the GitHub variables, environments and approvals are listed in [docs/DEPLOY.md](docs/DEPLOY.md). Until `GCP_PROJECT_ID` is set the deploy jobs skip themselves, so pushes stay green. 
+> [!NOTE]
+> The workflows were checked with `actionlint` and shellcheck, but the cloud side has not been exercised against a real project yet.
 
 ---
 
 ## 13. Configuration reference
 
 Settings come from environment variables or `.env` (names match [worker/config.py](worker/config.py); [.env.example](.env.example) documents each). Selected, grouped:
+
+<details>
+<summary><b>Selected settings, grouped (click to expand)</b></summary>
 
 | Group | Name | Default | Purpose |
 |---|---|---|---|
@@ -666,6 +848,8 @@ Settings come from environment variables or `.env` (names match [worker/config.p
 
 Per-organization settings (approval mode and timeout, separation of duties, run and concurrency limits, LLM budgets, model chain, memory) are edited under **Admin > Organization settings** and listed in [docs/MULTI_USER.md](docs/MULTI_USER.md). Simulator-only variables (`SIM_CHAOS`, `SIM_TODAY`, `SIM_PORT`, `SIM_HOST`, `SIM_DATA_DIR`, `SIM_TENANT_SECRET`) are read from the shell, not from `.env`.
 
+</details>
+
 ---
 
 ## 14. Known limitations
@@ -673,7 +857,7 @@ Per-organization settings (approval mode and timeout, separation of duties, run 
 **Scope and environment**
 
 - **Scope is web, files and HTTP.** There is no desktop or pixel-level computer use, no OS automation, no vision. The browser tool does not handle iframes or file uploads, and it cannot see canvas-only content.
-- **Simulated environment.** The company is small and clean compared with real systems; real-world robustness (CAPTCHAs, SSO/MFA on the target apps, flaky SPAs) is untested. The simulator is a single process with in-memory sessions and chaos state, and a chaos flag belongs to a company, not to one run.
+- **Simulated environment.** The company is small and clean compared with real systems; real-world behaviour (CAPTCHAs, SSO/MFA on the target apps, flaky SPAs) is untested. The simulator is a single process with in-memory sessions and chaos state, and a chaos flag belongs to a company, not to one run.
 - **The LLM can still misjudge.** The verifier is the same model family as the worker, so correlated errors are possible. It catches missing or wrong records, but not misreading ambiguous requirements it also misreads.
 - **Free-tier rate limits slow runs.** One call every 4 seconds by default (a shared bucket in multi-user mode), backing off on 429, so a 30-step task takes minutes. Quotas and model names can change on Google's side. The real model was never load-tested; the load test used the policy LLM ([section 7](#7-scale-and-proof)).
 - **Browser risk classification is heuristic.** It reads element roles and labels. A destructive action behind an unlabeled or oddly named control could be classified as a read. API calls and file writes are classified exactly.
@@ -755,6 +939,9 @@ No agent framework (LangChain, LlamaIndex, AutoGen and similar) is used, deliber
 
 ## 18. Project structure
 
+<details>
+<summary><b>The repository tree (click to expand)</b></summary>
+
 ```
 oneforall-agent/
 ├── run.py                    start simulator (:8001) + API/dashboard (:8000) [+ N workers in database mode]
@@ -808,15 +995,23 @@ oneforall-agent/
 │   │                         files.py  http.py  secrets.py  memory_tools.py  interaction.py  control.py
 │   └── ui/                   index.html  app.js  admin.js  approvals.js  memory.js  styles.css (dashboard)
 ├── evals/                    scenarios/*.yaml, run.py (runner), checkers.py, scenarios.py, simstate.py, results/
-├── tests/                    666 tests (scripted LLM, local HTML fixtures, a throwaway PostgreSQL database)
+├── tests/                    676 tests (scripted LLM, local HTML fixtures, a throwaway PostgreSQL database)
 ├── workspace/                the agent's "shared drive": credentials.json, README.txt
 ├── docs/                     ARCHITECTURE.md  MULTI_USER.md  DEPLOY.md  SCALING.md  DEMO_SCRIPT.md  loadtest-results.md/.json
 └── runs/                     (generated) per-run screenshots, downloads, report.md; file-mode run logs
 ```
 
+</details>
+
 ---
 
 ## 19. Reference: simulated company
+
+> [!WARNING]
+> The logins below belong to the simulated company's fake data and are for development only. Real credentials never go in this repository.
+
+<details>
+<summary><b>Logins, seeded data, chaos flags and admin endpoints (click to expand)</b></summary>
 
 The default tenant (used in single-user mode and by the CLI). Credentials (also in [workspace/credentials.json](workspace/credentials.json), which the agent is expected to find in single-user mode):
 
@@ -844,9 +1039,14 @@ Chaos flags (toggle in the dashboard, with `POST /admin/chaos`, or `SIM_CHAOS=a,
 
 Admin endpoints (open unless `SIM_ADMIN_TOKEN` is set; localhost only): `GET/POST /admin/chaos`, `POST /admin/reset` (optional body `{"chaos": [...]}`), `GET /admin/state` (bills and sent mail, the ground truth the evals read) for the default tenant, and `/admin/tenants[...]` to create, list, reset, inspect and delete the others.
 
+</details>
+
 ---
 
 ## 20. Troubleshooting
+
+<details>
+<summary><b>Symptoms and fixes (click to expand)</b></summary>
 
 | Symptom | Fix |
 |---|---|
@@ -868,3 +1068,11 @@ Admin endpoints (open unless `SIM_ADMIN_TOKEN` is set; localhost only): `GET/POS
 | Many tests are skipped | PostgreSQL is not reachable with `DATABASE_URL`; the tests that need it skip rather than fail. |
 | Browser window does not appear | Switch on **Headed browser** in the dashboard or pass `--headed` to the CLI; `HEADLESS=true` is the default, and a deploy-mode server is always headless. |
 | Eval or test failures because the date moved | Seed dates are relative to today. Pin them with `SIM_TODAY=YYYY-MM-DD` in the shell when starting the simulator. |
+
+</details>
+
+---
+
+<p align="center">
+  <sub>Built by <a href="https://github.com/adieladaniel">Adiel A Daniel</a> &nbsp;·&nbsp; <a href="LICENSE">MIT License</a> &nbsp;·&nbsp; <a href="#top">Back to top</a></sub>
+</p>

@@ -94,7 +94,9 @@ Re-observe the actual system state with your read-only tools and check each succ
 
 Rules:
 - You cannot change anything. Use only read-only tools (reading pages, files, GET requests).
-- If a system shows a login page, sign in with list_credentials + browser_fill_secret (you can authenticate but not change anything).
+- Go straight to the systems. Do not re-read workspace files (README, credentials.json, ...) the worker already \
+used. You may still use list_credentials + browser_fill_secret to sign in when a system shows a login page (you can \
+authenticate but not change anything).
 - For each success criterion, find direct evidence in the real system (open the record, list the data, read the \
 file). A criterion passes only if you observed it. If you could not observe it, it fails.
 - Check exact values (amounts, dates, IDs, names), not just existence. Check for duplicates or unwanted side effects \
@@ -108,20 +110,23 @@ reserve part of the budget for the two mandatory checks below; they are where wo
 
 Two checks are mandatory in EVERY verdict, in addition to one check per success criterion. The briefing lists the \
 worker's questions to the user (with the answers) and the systems you can look at.
-1. Ambiguity. Does any name or reference in the task match more than one entity in the systems (look at lists, \
-dropdowns, filters, search results)? If so, does another match have a competing candidate for what the task asked \
-(for example another entity with an equally recent item)? FAIL when a competing candidate exists and the worker did \
-not ask the user which one was meant (a question and answer in the briefing). When there is only one real candidate, \
-pass and say why.
+1. Ambiguity. Does any name or reference in the task match more than one entity in the systems? Open the list, \
+dropdown, filter or search results where such entities appear and list EVERY entity whose name or reference fits the \
+task's wording, including the one the worker chose. Then look up the requested item (for example the latest invoice) \
+for EACH match, not only the worker's choice. Report them as `ambiguity.matching_entities`, one entry per entity: \
+`name`, `checked` (true only if you looked for the requested item for that entity) and `candidate` (the competing \
+item you found for it, "" when it has none), plus `observed` (what you saw). Do not judge pass or fail yourself: the \
+runtime decides from this evidence (an entity left unchecked is sent back to you once; several entities with \
+candidates fail unless the worker asked the user which one was meant, see the briefing).
 2. Completeness. When the task asks for the latest / newest / all / a specific item, did the worker consider every \
 source that could hold it (every system it had access to, for example both a mailbox and a portal)? Look in the other \
 sources yourself for a newer or competing candidate. FAIL when one exists that the worker missed.
 Do not take the worker's word for either check; open the lists and sources and report what you saw.
 
 - When done, call `submit_verdict` exactly once with passed (true only if every criterion check AND both mandatory \
-checks passed), one check per criterion (criterion, passed, observed: what you actually saw), the `ambiguity` and \
-`completeness` checks (passed, observed), and a short summary. Say precisely what is wrong when something fails, so \
-the worker can fix it.
+checks passed), one check per criterion (criterion, passed, observed: what you actually saw), the `ambiguity` \
+evidence (matching_entities, observed), the `completeness` check (passed, observed), and a short summary. Say \
+precisely what is wrong when something fails, so the worker can fix it.
 """
 
 NO_TOOL_NUDGE = (
@@ -134,9 +139,14 @@ RESUME_NOTE = (
 )
 VERIFIER_NO_TOOL_NUDGE = "Call a read-only tool to re-check the system, or call `submit_verdict` if you are done."
 VERIFIER_MISSING_CHECKS = (
-    "Your verdict was not accepted: it lacks {missing}. Every verdict must include the mandatory `ambiguity` and "
-    "`completeness` checks, each with passed and observed (what you saw in the systems). Call `submit_verdict` again "
-    "with them."
+    "Your verdict was not accepted: it lacks {missing}. Every verdict must include the mandatory `ambiguity` "
+    "(matching_entities and observed) and `completeness` (passed and observed) checks, with what you saw in the "
+    "systems. Call `submit_verdict` again with them."
+)
+VERIFIER_UNCHECKED_ENTITIES = (
+    "Your verdict was not accepted yet: you listed matching entities you did not check: {entities}. Look up the "
+    "requested item for each of them in the systems, then call `submit_verdict` again with checked and candidate "
+    "filled in for every matching entity."
 )
 MALFORMED_CALL_NOTE = (
     "Your previous reply was a malformed tool call and was discarded. Call one tool at a time with simple, valid "

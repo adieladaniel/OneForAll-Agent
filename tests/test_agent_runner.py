@@ -730,6 +730,118 @@ async def test_failed_ambiguity_check_fails_the_verification_even_when_every_cri
     assert "Ambiguity" in feedback and "Company X Holdings" in feedback
 
 
+# ---------------------------------------------------------------- structured ambiguity evidence (decided by code)
+
+
+def entity(name: str, checked: bool = True, candidate: str = "") -> dict:
+    return {"name": name, "checked": checked, "candidate": candidate}
+
+
+def ambiguity_of(*entities: dict, observed: str = "looked at the vendor list", **extra) -> dict:
+    return {"matching_entities": list(entities), "observed": observed, **extra}
+
+
+async def audit_ambiguity(registry, settings, *ambiguities, answered=False):
+    """Run one task whose auditor submits the given ambiguity checks in turn; returns (state, llm, harness)."""
+    asks = [reply("Two matches.", call("ask_user", question="Which vendor?", options=["Ltd", "Holdings"]))] if answered else []
+    worker = lambda m, t: asks.pop(0) if asks else reply("Done.", finish_call())  # noqa: E731
+    llm = make_llm(worker=worker, auditor=[raw_verdict(ambiguity=a, completeness=OK_CHECK) for a in ambiguities])
+    h = Harness(llm, registry, settings, broker=AutoBroker(lambda kind, p: {"answer": "Holdings"}))
+    return await h.run(), llm, h
+
+
+def ambiguity_result(state) -> dict:
+    return next(c for c in state.final_report["verification"]["checks"] if c["criterion"] == "Ambiguity")
+
+
+async def test_fewer_than_two_matching_entities_pass_and_keep_the_auditors_text(registry, settings):
+    for entities in ([], [entity("Company X Ltd", True, "CX-1")]):
+        state, llm, _ = await audit_ambiguity(registry, settings, ambiguity_of(*entities, observed="only Ltd matches", passed=False))
+        assert state.status == "succeeded" and len(auditor_calls(llm)) == 1  # the model's own passed=false is not used
+        assert ambiguity_result(state) == {"criterion": "Ambiguity", "passed": True, "observed": "only Ltd matches"}
+
+
+async def test_two_entities_with_candidates_and_no_question_fail_and_name_the_candidates(registry, settings):
+    ambiguity = ambiguity_of(entity("Company X Ltd", True, "CX-2026-0412"), entity("Company X Holdings", True, "CXH-77"), passed=True)
+    state, llm, h = await audit_ambiguity(registry, settings, *[ambiguity] * 3)
+    check = ambiguity_result(state)
+    assert not check["passed"] and state.status == "failed"
+    assert "Company X Ltd (candidate: CX-2026-0412)" in check["observed"] and "Company X Holdings (candidate: CXH-77)" in check["observed"]
+    assert "never asked" in check["observed"]
+    assert "Company X Holdings" in worker_calls(llm)[1]["messages"][-1].content  # the reason reaches the worker
+    assert [c["passed"] for c in h.of("verification_finished")[0]["checks"]] == [True, False, True]
+
+
+async def test_two_entities_with_candidates_pass_when_the_worker_asked_and_got_an_answer(registry, settings):
+    ambiguity = ambiguity_of(entity("Company X Ltd", True, "CX-2026-0412"), entity("Company X Holdings", True, "CXH-77"), passed=False)
+    state, _, _ = await audit_ambiguity(registry, settings, ambiguity, answered=True)
+    check = ambiguity_result(state)
+    assert state.status == "succeeded" and check["passed"] and "asked the user" in check["observed"]
+    assert "Company X Holdings (candidate: CXH-77)" in check["observed"]
+
+
+async def test_a_question_without_an_answer_does_not_settle_the_ambiguity(registry, settings, tmp_path):
+    from worker.agent.verifier import Verifier
+    from worker.tools.base import ToolContext
+
+    ambiguity = ambiguity_of(entity("A", True, "a-1"), entity("B", True, "b-1"))
+    ctx = ToolContext(run_id="v1", run_dir=tmp_path, workspace=tmp_path, settings=settings)
+    outcomes = {}
+    for label, answer in (("unanswered", None), ("answered", "B")):
+        llm = make_llm(worker=[], auditor=[raw_verdict(ambiguity=ambiguity, completeness=OK_CHECK)])
+        outcomes[label] = await Verifier(llm, registry).verify(
+            task="t", criteria=["The record is saved"], claim={}, facts_text="", ctx=ctx,
+            questions=[{"question": "Which?", "options": [], "answer": answer}])
+    assert [c["passed"] for c in outcomes["unanswered"].checks] == [True, False, True]
+    assert all(c["passed"] for c in outcomes["answered"].checks)
+
+
+async def test_only_one_entity_with_a_candidate_passes(registry, settings):
+    ambiguity = ambiguity_of(entity("Company X Ltd", True, "CX-2026-0412"), entity("Company X Holdings", True, ""), entity("Company X GmbH", True, "none"))
+    state, _, _ = await audit_ambiguity(registry, settings, ambiguity)
+    check = ambiguity_result(state)
+    assert state.status == "succeeded" and check["passed"] and "Only one has a candidate" in check["observed"]
+    assert "Company X Holdings (no candidate)" in check["observed"] and "Company X GmbH (no candidate)" in check["observed"]
+
+
+async def test_unchecked_entities_are_sent_back_once_and_the_checked_answer_is_used(registry, settings):
+    first = ambiguity_of(entity("Company X Ltd", True, "CX-1"), entity("Company X Holdings", False, ""), passed=True)
+    second = ambiguity_of(entity("Company X Ltd", True, "CX-1"), entity("Company X Holdings", True, ""))
+    state, llm, _ = await audit_ambiguity(registry, settings, first, second)
+    audits = auditor_calls(llm)
+    assert len(audits) == 2 and state.status == "succeeded"
+    reprompt = audits[1]["messages"][-1]
+    assert reprompt.role == "tool" and "Company X Holdings" in reprompt.content and "Company X Ltd" not in reprompt.content
+    assert audits[1]["tool_choice"] == "auto" and [t.name for t in audits[1]["tools"]][-1] == "submit_verdict"
+    assert ambiguity_result(state)["passed"]
+
+
+async def test_entities_still_unchecked_after_the_one_reprompt_fail_the_check_not_the_audit(registry, settings):
+    unchecked = ambiguity_of(entity("Company X Ltd", True, "CX-1"), entity("Company X Holdings", False, ""), passed=True)
+    state, llm, h = await audit_ambiguity(registry, settings, *[unchecked] * 8)
+    audits = auditor_calls(llm)
+    assert len(audits[1]["messages"]) > 2 and len(audits[2]["messages"]) == 2  # round 1 = verdict + one re-prompt, then a new audit
+    verification = h.of("verification_finished")[0]
+    assert not verification["inconclusive"] and not verification["passed"]
+    check = next(c for c in verification["checks"] if c["criterion"] == "Ambiguity")
+    assert not check["passed"] and "Company X Holdings" in check["observed"] and "did not look" in check["observed"]
+    assert [c["passed"] for c in verification["checks"]] == [True, False, True]
+
+
+async def test_the_unchecked_reprompt_is_sent_once_per_audit_round(registry, settings):
+    unchecked = ambiguity_of(entity("A", False, ""), entity("B", True, ""))
+    llm = make_llm(worker=lambda m, t: reply("Claim.", finish_call()), auditor=[raw_verdict(ambiguity=unchecked, completeness=OK_CHECK)] * 8)
+    await Harness(llm, registry, settings).run()
+    first_round = auditor_calls(llm)[:2]  # one verdict, one re-prompted verdict, then the verification result ends the round
+    assert "you listed matching entities you did not check" in first_round[1]["messages"][-1].content
+    assert sum("you listed matching entities you did not check" in m.content for m in first_round[1]["messages"]) == 1
+
+
+async def test_structured_ambiguity_with_an_empty_observed_counts_as_missing(registry, settings):
+    state, llm, _ = await audit_ambiguity(registry, settings, ambiguity_of(entity("A"), observed="  "), ambiguity_of(entity("A"), observed="  "))
+    assert state.final_report["verification"]["inconclusive"] and len(auditor_calls(llm)) == 2
+
+
 async def test_failed_completeness_check_fails_the_verification(registry, settings):
     missed = {"passed": False, "observed": "The mailbox holds a newer invoice the worker never looked at"}
     llm = make_llm(worker=lambda m, t: reply("Claim.", finish_call()),

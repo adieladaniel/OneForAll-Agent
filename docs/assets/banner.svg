@@ -1,0 +1,77 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 300" width="1200" height="300" role="img" aria-labelledby="t d">
+  <title id="t">OneForAll Agent</title>
+  <desc id="d">Animated banner: the agent loop Plan, Act, Verify, Report. Give it a business task in plain words. It does the work in real systems, asks before it changes anything, and proves the result.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0b1020"/><stop offset="0.55" stop-color="#1b1745"/><stop offset="1" stop-color="#0c3a4a"/>
+    </linearGradient>
+    <radialGradient id="glow"><stop offset="0" stop-color="#2dd4bf" stop-opacity="0.9"/><stop offset="1" stop-color="#2dd4bf" stop-opacity="0"/></radialGradient>
+    <pattern id="dots" width="24" height="24" patternUnits="userSpaceOnUse"><circle cx="2" cy="2" r="1.1" fill="#a5b4fc" opacity="0.14"/></pattern>
+    <marker id="ar" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 1 L9 5 L0 9z" fill="#fbbf24"/></marker>
+    <style>
+      text { font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+      .h { font-size: 54px; font-weight: 800; fill: #ffffff; letter-spacing: -1px; }
+      .s { font-size: 13px; fill: #99f6e4; letter-spacing: 2px; text-transform: uppercase; font-weight: 600; }
+      .tag { font-size: 18px; fill: #dbe4ff; }
+      .n { font-size: 15px; font-weight: 700; fill: #f8fafc; }
+      .c { font-size: 11.5px; fill: #a5b4fc; }
+      .l { font-size: 11.5px; fill: #fbbf24; font-style: italic; }
+      .k { font-size: 12px; fill: #94a3b8; letter-spacing: 3px; font-weight: 600; }
+    </style>
+  </defs>
+  <rect x="1" y="1" width="1198" height="298" rx="22" fill="url(#bg)" stroke="#334155" stroke-width="2"/>
+  <rect x="1" y="1" width="1198" height="298" rx="22" fill="url(#dots)"/>
+
+  <rect x="60" y="48" width="40" height="40" rx="10" fill="#4f46e5"/>
+  <path d="M70 68.5l7 7 12-14.5" fill="none" stroke="#fff" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="114" y="73" class="s">autonomous AI task worker</text>
+  <text x="58" y="146" class="h">OneForAll Agent</text>
+  <text x="60" y="190" class="tag">Give it a business task in plain words.</text>
+  <text x="60" y="215" class="tag">It does the work in real systems, asks before</text>
+  <text x="60" y="240" class="tag">it changes anything, and proves the result.</text>
+
+  <text x="690" y="62" class="k">THE AGENT LOOP</text>
+  <path d="M980 118 C980 62 835 62 835 118" fill="none" stroke="#fbbf24" stroke-width="1.6" stroke-dasharray="4 5" marker-end="url(#ar)" opacity="0.8"/>
+  <text x="907" y="52" text-anchor="middle" class="l">fix and re-check</text>
+
+  <path d="M690 150 H1125" stroke="#4f46e5" stroke-width="2.5" stroke-dasharray="3 7" stroke-linecap="round" opacity="0.8">
+    <animate attributeName="stroke-dashoffset" from="0" to="-20" dur="1s" repeatCount="indefinite"/>
+  </path>
+  <circle r="6" fill="#fde68a">
+    <animateMotion dur="8s" repeatCount="indefinite" path="M690 150 H1125" keyPoints="0;1;1" keyTimes="0;0.75;1" calcMode="linear"/>
+    <animate attributeName="opacity" dur="8s" repeatCount="indefinite" keyTimes="0;0.02;0.74;0.78;1" values="0;1;1;0;0"/>
+  </circle>
+  <circle r="14" fill="#fde68a" opacity="0.25">
+    <animateMotion dur="8s" repeatCount="indefinite" path="M690 150 H1125" keyPoints="0;1;1" keyTimes="0;0.75;1" calcMode="linear"/>
+    <animate attributeName="opacity" dur="8s" repeatCount="indefinite" keyTimes="0;0.02;0.74;0.78;1" values="0;0.25;0.25;0;0"/>
+  </circle>
+  
+  <g>
+    <circle cx="690" cy="150" r="38" fill="url(#glow)" opacity="0.18"><animate attributeName="opacity" dur="8s" repeatCount="indefinite" keyTimes="0;0.1;0.97;1" values="1;0.18;0.18;1"/></circle>
+    <circle cx="690" cy="150" r="30" fill="#111827" stroke="#6366f1" stroke-width="2"/>
+    <circle cx="690" cy="150" r="30" fill="none" stroke="#2dd4bf" stroke-width="3" opacity="0.2"><animate attributeName="opacity" dur="8s" repeatCount="indefinite" keyTimes="0;0.1;0.97;1" values="1;0.0;0.0;1"/></circle>
+    <text x="690" y="155" text-anchor="middle" class="n">Plan</text>
+    <text x="690" y="208" text-anchor="middle" class="c">goal, criteria, steps</text>
+  </g>
+  <g>
+    <circle cx="835" cy="150" r="38" fill="url(#glow)" opacity="0.18"><animate attributeName="opacity" dur="8s" repeatCount="indefinite" keyTimes="0;0.200;0.250;0.370;1" values="0.18;0.18;1;0.18;0.18"/></circle>
+    <circle cx="835" cy="150" r="30" fill="#111827" stroke="#6366f1" stroke-width="2"/>
+    <circle cx="835" cy="150" r="30" fill="none" stroke="#2dd4bf" stroke-width="3" opacity="0.2"><animate attributeName="opacity" dur="8s" repeatCount="indefinite" keyTimes="0;0.200;0.250;0.370;1" values="0.0;0.0;1;0.0;0.0"/></circle>
+    <text x="835" y="155" text-anchor="middle" class="n">Act</text>
+    <text x="835" y="208" text-anchor="middle" class="c">real tools, asks first</text>
+  </g>
+  <g>
+    <circle cx="980" cy="150" r="38" fill="url(#glow)" opacity="0.18"><animate attributeName="opacity" dur="8s" repeatCount="indefinite" keyTimes="0;0.450;0.500;0.620;1" values="0.18;0.18;1;0.18;0.18"/></circle>
+    <circle cx="980" cy="150" r="30" fill="#111827" stroke="#6366f1" stroke-width="2"/>
+    <circle cx="980" cy="150" r="30" fill="none" stroke="#2dd4bf" stroke-width="3" opacity="0.2"><animate attributeName="opacity" dur="8s" repeatCount="indefinite" keyTimes="0;0.450;0.500;0.620;1" values="0.0;0.0;1;0.0;0.0"/></circle>
+    <text x="980" y="155" text-anchor="middle" class="n">Verify</text>
+    <text x="980" y="208" text-anchor="middle" class="c">independent audit</text>
+  </g>
+  <g>
+    <circle cx="1125" cy="150" r="38" fill="url(#glow)" opacity="0.18"><animate attributeName="opacity" dur="8s" repeatCount="indefinite" keyTimes="0;0.700;0.750;0.95;1" values="0.18;0.18;1;1;0.18"/></circle>
+    <circle cx="1125" cy="150" r="30" fill="#111827" stroke="#6366f1" stroke-width="2"/>
+    <circle cx="1125" cy="150" r="30" fill="none" stroke="#2dd4bf" stroke-width="3" opacity="0.2"><animate attributeName="opacity" dur="8s" repeatCount="indefinite" keyTimes="0;0.700;0.750;0.95;1" values="0.0;0.0;1;1;0.0"/></circle>
+    <text x="1125" y="155" text-anchor="middle" class="n">Report</text>
+    <text x="1125" y="208" text-anchor="middle" class="c">summary and evidence</text>
+  </g>
+</svg>

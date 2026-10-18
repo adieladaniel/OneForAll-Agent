@@ -108,6 +108,23 @@ def test_parse_task_understands_both_task_shapes(task, kind, vendor, number):
     assert parse_task("Water the plants") is None
 
 
+def test_the_policy_verdict_submits_structured_ambiguity_evidence_and_accurate_texts():
+    from worker.agent.verifier import ambiguity_check
+    from worker.llm.policy import _verdict
+
+    call = _verdict(["c"], [("c", True, "ok")], "fine", "Globex Corporation", ["the bill page"]).calls[0]
+    assert call[0] == "submit_verdict"
+    args = call[1]
+    assert args["ambiguity"]["matching_entities"] == [{"name": "Globex Corporation", "checked": True, "candidate": ""}]
+    check, unchecked = ambiguity_check(args["ambiguity"], asked=False)
+    assert check["passed"] and not unchecked
+    assert "It opened the bill page." in args["completeness"]["observed"]
+    assert "specific invoice" not in args["completeness"]["observed"]
+    nothing = _verdict(["c"], [("c", False, "no")], "bad").calls[0][1]
+    assert nothing["ambiguity"]["matching_entities"] == [] and "could not open any record" in nothing["completeness"]["observed"]
+    assert ambiguity_check(nothing["ambiguity"], asked=False)[0]["passed"]
+
+
 def test_amount_helpers():
     assert plain_amount("5,681.96 USD") == "5681.96" and plain_amount("12.50") == "12.50" and plain_amount("") == ""
     assert same_amount("5,681.96", "5681.960") and not same_amount("5,681.96", "5681.97") and not same_amount("abc", "1")
@@ -498,6 +515,10 @@ async def test_the_auditor_reports_only_what_it_sees(sim_url, browser_pool, tmp_
         finally:
             await close_browser(ctx)
     assert verdicts["right"].passed and len(verdicts["right"].checks) == 5  # 3 criteria + the 2 mandatory checks
+    mandatory = {c["criterion"]: c for c in verdicts["right"].checks[-2:]}
+    assert mandatory["Ambiguity"]["passed"] and "no search for other entities" in mandatory["Ambiguity"]["observed"]
+    completeness = mandatory["Completeness"]["observed"]
+    assert "the vendor portal invoice page" in completeness and "specific invoice" not in completeness
     wrong = verdicts["wrong"]
     assert not wrong.passed and not wrong.inconclusive
     failed = wrong.failed_checks

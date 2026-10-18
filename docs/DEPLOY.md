@@ -236,8 +236,9 @@ Prices and free allowances change; check the current pricing pages before relyin
 ## 9. Known limitations
 
 * **The simulated company is ephemeral.** Its SQLite data lives on the instance's disk. Every start (a deploy, a scale from
-  zero, a crash) creates **fresh tenants with new logins**, and the start-up resync rewrites the vault to match. Whatever
-  the agent changed in the simulated mail, portal or ERP is gone after a restart. Run history in PostgreSQL is not.
+  zero, a crash) recreates each organization's tenant from the seed, with the same logins when `SIM_TENANT_SECRET` is set
+  (new random ones without it, which the start-up resync then writes to the vault). Whatever the agent changed in the
+  simulated mail, portal or ERP is gone after a restart. Run history in PostgreSQL is not.
 * **Run artifacts are ephemeral too** (screenshots and downloads under `RUNS_DIR`); see limitation "Artifacts are local files" in
   the README.
 * **Single instance.** `max-instances 1` limits throughput to one worker process with `WORKER_CONCURRENCY=2` runs at a time

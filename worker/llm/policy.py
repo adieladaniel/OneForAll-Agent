@@ -738,16 +738,28 @@ def _judge(criteria: list[str], bill_id: str, invoice: str, bill_page: Page | No
     failed = [c for c, ok, _ in checks if not ok]
     summary = (f"Bill #{bill_id} for invoice {invoice} matches the vendor portal and is the only one." if not failed
                else f"{len(failed)} check(s) failed for bill #{bill_id}: " + "; ".join(note for _, ok, note in checks if not ok))
-    return _verdict(criteria, checks, summary)
+    vendor = (bill or source or {}).get("vendor", "").split(" (")[0]
+    looked_at = ([where] + (["the vendor portal invoice page"] if source is not None else [])
+                 + (["the ERP bill list for that invoice number"] if api is not None else []))
+    return _verdict(criteria, checks, summary, vendor, looked_at if bill is not None or source is not None else [])
 
 
-def _verdict(criteria: list[str], checks: list[tuple[str, bool, str]], summary: str) -> Decision:
+def _verdict(criteria: list[str], checks: list[tuple[str, bool, str]], summary: str, vendor: str = "",
+             looked_at: list[str] | None = None) -> Decision:
+    """``vendor``: the one entity this scripted auditor looked at; ``looked_at``: the sources it opened."""
+    entities = [{"name": vendor, "checked": True, "candidate": ""}] if vendor else []
+    seen = (f"It opened {', '.join(looked_at)}." if looked_at else "It could not open any record.")
     return Decision(summary, [("submit_verdict", {
         "passed": all(ok for _, ok, _ in checks),
         "checks": [{"criterion": c, "passed": ok, "observed": note} for c, ok, note in checks],
-        # The scripted flow names one invoice number, so there is neither a second matching entity nor a "latest" to find.
-        "ambiguity": {"passed": True, "observed": "The task names one invoice number; no other entity competes for it."},
-        "completeness": {"passed": True, "observed": "The task names a specific invoice, not the latest or all of them."},
+        # The scripted flow only re-opens the records the claim names: it lists the one vendor it saw and does not search
+        # for other vendors, so it reports a single matching entity (which the runtime passes) and says what it did not do.
+        "ambiguity": {"matching_entities": entities,
+                      "observed": (f"Only the vendor on the records was looked at ({vendor}); no search for other entities "
+                                   "with a similar name was made." if vendor else
+                                   "No vendor could be read, and no search for other entities with a similar name was made.")},
+        "completeness": {"passed": True, "observed": f"{seen} It did not search other sources (for example a mailbox) for a "
+                                                     "newer or competing item."},
         "summary": summary})])
 
 

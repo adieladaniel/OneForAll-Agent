@@ -12,6 +12,7 @@ from worker.agent.prompts import (
     VERIFIER_MISSING_CHECKS,
     VERIFIER_NO_TOOL_NUDGE,
     VERIFIER_SYSTEM_PROMPT,
+    VERIFIER_UNCHECKED_ENTITIES,
 )
 from worker.agent.state import truncate
 from worker.llm.base import LLMClient, LLMError, MalformedCallError, Message, ToolCall
@@ -38,6 +39,28 @@ _CHECK_SCHEMA = {
     },
     "required": ["passed", "observed"],
 }
+_AMBIGUITY_SCHEMA = {
+    "type": "object",
+    "description": "Mandatory evidence for the ambiguity check; the runtime decides pass or fail from it. List EVERY entity "
+                   "in the systems whose name or reference fits the task's wording (including the one the worker chose).",
+    "properties": {
+        "matching_entities": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "checked": {"type": "boolean", "description": "True only if you looked for the requested item for this entity."},
+                    "candidate": {"type": "string", "description": "The competing item found for this entity; empty when none."},
+                },
+                "required": ["name", "checked", "candidate"],
+            },
+        },
+        "observed": {"type": "string", "description": "What you actually saw in the systems."},
+        "passed": {"type": "boolean", "description": "Optional and ignored when matching_entities is given."},
+    },
+    "required": ["matching_entities", "observed"],
+}
 
 
 class SubmitVerdictTool(Tool):
@@ -47,8 +70,8 @@ class SubmitVerdictTool(Tool):
     description = (
         "Submit your final verdict. passed is true only if EVERY success criterion was directly observed to hold AND "
         "both mandatory checks passed. Provide one check per criterion with what you actually observed, plus the "
-        "mandatory `ambiguity` check (does a name in the task match several entities with a competing candidate that "
-        "the worker did not ask about?) and `completeness` check (did the worker consider every source that could hold "
+        "mandatory `ambiguity` evidence (every entity matching a name in the task, whether you checked it and its "
+        "competing candidate; the runtime decides) and `completeness` check (did the worker consider every source that could hold "
         "the latest / all / requested item?)."
     )
     parameters = {
@@ -67,8 +90,7 @@ class SubmitVerdictTool(Tool):
                     "required": ["criterion", "passed", "observed"],
                 },
             },
-            "ambiguity": {**_CHECK_SCHEMA, "description": "Mandatory: false when another matching entity has a competing "
-                          "candidate and the worker did not ask the user which one was meant."},
+            "ambiguity": _AMBIGUITY_SCHEMA,
             "completeness": {**_CHECK_SCHEMA, "description": "Mandatory: false when a source the worker did not consider "
                              "holds a newer or competing candidate."},
             "summary": {"type": "string", "description": "Short summary; if failed, say exactly what is wrong."},
@@ -108,6 +130,64 @@ def _questions_text(questions: list[dict]) -> str:
         options = f" (options: {', '.join(map(str, q['options']))})" if q.get("options") else ""
         lines.append(f"- Q: {q.get('question', '')}{options}\n  A: {q.get('answer') or '(no answer received)'}")
     return "\n".join(lines)
+
+
+_NO_CANDIDATE = {"", "none", "n/a", "na", "-", "null"}
+
+
+def _entities(raw: dict) -> list[dict] | None:
+    """The ``matching_entities`` of an ambiguity check as ``{name, checked, candidate}`` (same name merged); None when the
+    check is the older ``{passed, observed}`` shape without them."""
+    listed = raw.get("matching_entities")
+    if not isinstance(listed, list):
+        return None
+    merged: dict[str, dict] = {}
+    for item in listed:
+        if not isinstance(item, dict) or not str(item.get("name") or "").strip():
+            continue
+        name = str(item["name"]).strip()
+        candidate = str(item.get("candidate") or "").strip()
+        candidate = "" if candidate.lower() in _NO_CANDIDATE else candidate
+        entry = merged.setdefault(name.casefold(), {"name": name, "checked": True, "candidate": ""})
+        entry["checked"] = entry["checked"] and item.get("checked") is True
+        entry["candidate"] = entry["candidate"] or candidate
+    return list(merged.values())
+
+
+def _describe_entities(entities: list[dict]) -> str:
+    return "; ".join(f"{e['name']} (candidate: {e['candidate']})" if e["candidate"] else f"{e['name']} (no candidate)"
+                     for e in entities)
+
+
+def ambiguity_check(raw: dict, asked: bool) -> tuple[dict, list[str]]:
+    """Decide the Ambiguity check from the auditor's structured evidence, not from its own pass / fail judgment.
+
+    Returns the check (``criterion``, ``passed``, ``observed``) and the names of matching entities the auditor did not
+    check (the caller sends the verdict back once for those; if they stay unchecked the check fails). ``asked``: the worker
+    put a question to the user and got an answer. A check without ``matching_entities`` keeps the auditor's own ``passed``."""
+    note = str(raw.get("observed") or "").strip()
+    entities = _entities(raw)
+
+    def check(passed: bool, observed: str) -> dict:
+        return {"criterion": "Ambiguity", "passed": passed, "observed": observed}
+
+    if entities is None:
+        return check(bool(raw.get("passed")), note), []
+    if len(entities) < 2:
+        return check(True, note), []
+    listing = f"Matching entities: {_describe_entities(entities)}."
+    unchecked = [e["name"] for e in entities if not e["checked"]]
+    if unchecked:
+        return check(False, f"Not decidable: the auditor did not look for the requested item for {', '.join(unchecked)}, "
+                            f"so a competing candidate cannot be ruled out. {listing} Auditor's note: {note}"), unchecked
+    competing = [e for e in entities if e["candidate"]]
+    if len(competing) < 2:
+        return check(True, f"{listing} Only one has a candidate, so nothing competes. Auditor's note: {note}"), []
+    if asked:
+        return check(True, f"{listing} Several have a candidate, but the worker asked the user which one was meant "
+                           f"and got an answer. Auditor's note: {note}"), []
+    return check(False, f"{listing} Several matching entities have a candidate and the worker never asked the user "
+                        f"which one was meant: {_describe_entities(competing)}. Auditor's note: {note}"), []
 
 
 def _briefing(
@@ -153,7 +233,9 @@ class Verifier:
         ``questions``: what the worker asked the user (``{"question", "options", "answer"}``), so the auditor can tell
         whether an ambiguity was put to the user. ``sources``: a description of the systems the auditor can look at.
         A verdict without the mandatory ``ambiguity`` / ``completeness`` checks is sent back once (it gets one extra
-        step for that); if it still lacks them the audit is inconclusive."""
+        step for that); if it still lacks them the audit is inconclusive. The Ambiguity check is decided here from the
+        auditor's ``matching_entities`` (see ``ambiguity_check``): entities it left unchecked are sent back once the same
+        way, and if they stay unchecked the Ambiguity check fails (the audit is not made inconclusive for that)."""
         tool_names = ", ".join(self._tools.names())
         described = f"{sources}\n" if sources else ""
         messages = [
@@ -165,7 +247,8 @@ class Verifier:
         redactor = ctx.extras.get("redactor")
         previous = ctx.extras.get("read_only")
         ctx.extras["read_only"] = True
-        budget, turn, malformed, resubmitted = self.max_steps, 0, 0, False
+        budget, turn, malformed, resubmitted, rechecked = self.max_steps, 0, 0, False, False
+        asked = any(q.get("answer") is not None for q in questions or [])
         try:
             while turn < budget:
                 last_turn = turn == budget - 1
@@ -192,7 +275,16 @@ class Verifier:
                 if verdict_call is not None:
                     missing = self._missing_checks(verdict_call.args)
                     if not missing:
-                        return self._parse(verdict_call, usage)
+                        unchecked = ambiguity_check(verdict_call.args["ambiguity"], asked)[1]
+                        if not unchecked or rechecked:
+                            return self._parse(verdict_call, usage, asked)
+                        rechecked, budget = True, budget + 1
+                        messages += [
+                            Message(role="assistant", content=response.text, tool_calls=[verdict_call]),
+                            Message(role="tool", content="ERROR: " + VERIFIER_UNCHECKED_ENTITIES.format(entities=", ".join(unchecked)),
+                                    tool_call_id=verdict_call.id, name=verdict_call.name),
+                        ]
+                        continue
                     if resubmitted:
                         return self._inconclusive(usage, f"The auditor's verdict lacked the mandatory check(s): {', '.join(missing)}.")
                     resubmitted, budget = True, budget + 1
@@ -238,20 +330,24 @@ class Verifier:
         missing = []
         for key in MANDATORY_CHECKS:
             value = args.get(key)
-            if not (isinstance(value, dict) and isinstance(value.get("passed"), bool) and str(value.get("observed") or "").strip()):
+            decided = isinstance(value, dict) and (isinstance(value.get("passed"), bool)
+                                                   or (key == "ambiguity" and isinstance(value.get("matching_entities"), list)))
+            if not (decided and str(value.get("observed") or "").strip()):
                 missing.append(key)
         return missing
 
     @staticmethod
-    def _parse(call: ToolCall, usage: Verdict) -> Verdict:
+    def _parse(call: ToolCall, usage: Verdict, asked: bool = False) -> Verdict:
         checks = [
             {"criterion": str(c.get("criterion", "")), "passed": bool(c.get("passed")), "observed": str(c.get("observed", ""))}
             for c in call.args.get("checks") or []
             if isinstance(c, dict)
         ]
+        completeness = call.args["completeness"]
         mandatory = [
-            {"criterion": name, "passed": bool(call.args[key]["passed"]), "observed": str(call.args[key]["observed"])}
-            for key, name in MANDATORY_CHECKS.items()
+            ambiguity_check(call.args["ambiguity"], asked)[0],
+            {"criterion": MANDATORY_CHECKS["completeness"], "passed": bool(completeness["passed"]),
+             "observed": str(completeness["observed"])},
         ]
         # The mandatory checks sit in the same list as the criterion checks, so events, report and evals show them alike.
         passed = bool(call.args.get("passed")) and bool(checks) and all(c["passed"] for c in checks + mandatory)
