@@ -105,7 +105,7 @@ repository (suggested name `oneforall-agent`) and a Neon database.
    `BUDGET_AMOUNT` to 5 (USD per month). The script is safe to run again. It:
 
    * enables the APIs (Cloud Run, Artifact Registry, Secret Manager, IAM, IAM Credentials, STS, Billing Budgets);
-   * creates the Artifact Registry repository `oneforall`, keeping the 10 newest images;
+   * creates the Artifact Registry repository `oneforall`, keeping the 3 newest images (each is about 2 GB with Chromium, and storage above the small free allowance is billed);
    * creates the service accounts `ofa-deployer` (Cloud Run admin, Artifact Registry writer on that repository, and
      permission to act as `ofa-runtime` only) and `ofa-runtime` (reads the secrets, and is the identity the app runs as);
    * creates the Workload Identity pool `github` and provider `github-oidc`, limited to your repository, so GitHub Actions
@@ -226,7 +226,7 @@ Prices and free allowances change; check the current pricing pages before relyin
   an instance left running all month does not.
 * **Neon free plan**: a small shared compute that scales to zero, with a monthly compute-hours allowance and a storage limit.
   The database is awake while the container is running (see section 3).
-* **Artifact Registry**: a free allowance of storage; the cleanup policy keeps only the 10 newest images.
+* **Artifact Registry**: a free allowance of storage; the cleanup policy keeps only the 3 newest images (enough to roll back two releases).
 * **Secret Manager**: a few secrets with a few accesses a month are inside the free allowance.
 * **Gemini API free tier**: rate and daily limits per model; the app already fails over between models and backs off on 429.
   A busy day can exhaust the free quota; runs then wait or fail with a clear message.

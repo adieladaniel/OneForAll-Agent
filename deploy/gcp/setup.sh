@@ -103,7 +103,7 @@ gcloud services enable --project "$PROJECT_ID" \
   iamcredentials.googleapis.com sts.googleapis.com billingbudgets.googleapis.com cloudresourcemanager.googleapis.com
 
 # ---------------------------------------------------------------- Artifact Registry
-say "Artifact Registry repository '${AR_REPO}' (keeps the 10 newest images)"
+say "Artifact Registry repository '${AR_REPO}' (keeps the 3 newest images)"
 if gcloud artifacts repositories describe "$AR_REPO" --location "$REGION" --project "$PROJECT_ID" > /dev/null 2>&1; then
   note "exists"
 else
@@ -113,7 +113,7 @@ fi
 policy_file="$(mktemp)"
 cat > "$policy_file" << 'POLICY'
 [
-  {"name": "keep-newest-10", "action": {"type": "Keep"}, "mostRecentVersions": {"keepCount": 10}},
+  {"name": "keep-newest-3", "action": {"type": "Keep"}, "mostRecentVersions": {"keepCount": 3}},
   {"name": "delete-the-rest", "action": {"type": "Delete"}, "condition": {"tagState": "any"}}
 ]
 POLICY
