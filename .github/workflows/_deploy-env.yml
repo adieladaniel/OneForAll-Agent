@@ -64,7 +64,7 @@ jobs:
         with:
           workload_identity_provider: ${{ vars.WIF_PROVIDER }}
           service_account: ${{ vars.DEPLOYER_SA }}
-      - uses: google-github-actions/setup-gcloud@v2
+      - uses: google-github-actions/setup-gcloud@v3
 
       # 1. Migrate the database in a Cloud Run job: the same image and the environment's own DATABASE_URL secret.
       - name: Deploy and run the migration job
