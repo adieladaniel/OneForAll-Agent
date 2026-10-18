@@ -135,7 +135,7 @@ sequenceDiagram
   <tr>
     <td valign="top">🔒 <b>Organization isolation</b><br>Another organization's run, file or approval answers 404, never 403, and the load test found no leak in about 118,000 scanned responses.</td>
     <td valign="top">📈 <b>Observability</b><br>A live timeline, structured logs, Prometheus <code>/metrics</code>, <code>/healthz</code> and <code>/readyz</code>, and an admin System card.</td>
-    <td valign="top">🚀 <b>CI/CD to Cloud Run</b><br>GitHub Actions lint, test on PostgreSQL 18 and build the image, then deploy to staging and production with a smoke-tested traffic switch and a rollback workflow.</td>
+    <td valign="top">🚀 <b>CI/CD to Cloud Run</b><br>GitHub Actions lint, test on PostgreSQL 18 and build the image. A ready-to-use pipeline deploys to staging and production with a smoke-tested traffic switch and a rollback workflow (not running live; see section 1.6).</td>
   </tr>
 </table>
 
