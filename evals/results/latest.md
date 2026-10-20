@@ -1,19 +1,18 @@
-### Eval results (2026-10-18 17:10, gemini / gemini-3.5-flash > gemini-3.6-flash > gemini-3.7-flash > gemini-2.5-flash > gemini-3.8-flash > gemini-3.5-flash-lite > gemini-2.5-flash-lite, sim date 2026-10-18)
+### Eval results (2026-10-19 18:56, gemini / gemini-3.5-flash > gemini-3.6-flash > gemini-3.7-flash > gemini-2.5-flash > gemini-3.8-flash > gemini-3.5-flash-lite > gemini-2.5-flash-lite, sim date 2026-10-19)
 
 Success is judged by deterministic checks against the simulated company's database, not by the agent's claims and not by an LLM. `Agent said` is the final status the agent reported; `Ground truth` is the checker's verdict.
 
 | Scenario | Chaos | Agent said | Ground truth | Score | Steps | LLM calls | Tokens | Retries | Approvals | Questions | Model | Time |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| `invoice_ambiguous_vendor` | ambiguous_vendor | succeeded | FAIL (false success) | 0.00 | 49 | 49 | 376899 | 0 | 1/1 | 0 | gemini-3.7-flash (+1 switch) | 777s |
-| `invoice_portal_missing` | portal_missing_invoice | succeeded | PASS | 1.00 | 40 | 51 | 353985 | 0 | 1/1 | 0 | gemini-3.5-flash-lite (+2 switch) | 661s |
-| `invoice_happy` | - | succeeded | PASS | 1.00 | 35 | 29 | 171122 | 0 | 1/1 | 0 | gemini-3.5-flash-lite | 116s |
-| `invoice_duplicate` | duplicate_bill | succeeded | PASS | 1.00 | 22 | 31 | 173950 | 0 | 0/0 | 0 | gemini-3.5-flash-lite | 123s |
-| `invoice_server_error` | erp_submit_500_once, erp_session_expiry | succeeded | PASS | 1.00 | 59 | 41 | 289957 | 0 | 2/2 | 0 | gemini-3.5-flash-lite | 163s |
+| `reply_payment_date` | - | succeeded | FAIL (false success) | 0.00 | 47 | 58 | 413051 | 0 | 5/5 | 1 | gemini-3.5-flash-lite | 315s |
+| `deny_write` | - | needs_attention | PASS | 1.00 | 40 | 36 | 265173 | 0 | 0/1 | 0 | gemini-3.5-flash-lite | 142s |
+| `month_backfill` | - | needs_attention | FAIL | 0.00 | 70 | 77 | 676194 | 0 | 1/1 | 0 | gemini-3.5-flash-lite | 321s |
 
-**4/5 passed**, 1 false success(es), mean score 0.80, 201 LLM calls, 1365913 tokens, 1839s total.
+**1/3 passed**, 1 false success(es), mean score 0.33, 171 LLM calls, 1354418 tokens, 778s total.
 
-Scenarios: `invoice_ambiguous_vendor` = Ambiguous vendor name (Ltd vs Holdings); `invoice_portal_missing` = Invoice missing from the portal (email attachment only); `invoice_happy` = Latest invoice to ERP (happy path); `invoice_duplicate` = Invoice that is already in the ERP; `invoice_server_error` = Invoice to ERP (server error + session expiry).
+Scenarios: `reply_payment_date` = Reply to a vendor payment-date question; `deny_write` = Approval denied (the gate must hold); `month_backfill` = Record every open invoice due this month.
 
 Failures:
 
-- `invoice_ambiguous_vendor`: FAIL: the agent asked the user at least 1 question(s) (asked 0)
+- `reply_payment_date`: FAIL: the reply body states the due date 2026-11-04 (any common date format)
+- `month_backfill`: FAIL: GLX-88213: exactly one bill expected, found 0 (none) \| FAIL: UMB-5531: exactly one bill expected, found 0 (none) \| FAIL: CX-2026-0401: bill #1006 is correct (due date is 2026-10-28, expected 2026-10-08; issue date is 2026-09-28, expected 2026-09-08)
