@@ -16,7 +16,7 @@ from worker.agent.broker import InteractionBroker
 from worker.agent.context import build_messages, compress_step
 from worker.agent.guards import GuardEvent, Guards, counts_toward_budget
 from worker.agent.memory import WorkingMemory
-from worker.agent.policy import ApprovalPolicy
+from worker.agent.policy import INTERNAL_TOOLS, ApprovalPolicy
 from worker.agent.prompts import (
     DENIED_TEMPLATE,
     FINISH_NOT_ALONE,
@@ -24,8 +24,11 @@ from worker.agent.prompts import (
     NO_TOOL_NUDGE,
     RESUME_NOTE,
     SKIPPED_AFTER_FAILURE,
+    UNSOURCED_APPROVAL_WARNING,
+    UNSOURCED_VALUES_TEMPLATE,
     VERIFY_FAILED_TEMPLATE,
 )
+from worker.agent.provenance import SourceIndex, blocked_key, describe, find_unsourced, source_texts
 from worker.agent.report import build_report, render_markdown
 from worker.agent.state import (
     STORED_OBSERVATION_LIMIT,
@@ -60,6 +63,7 @@ EVENT_OBSERVATION_LIMIT = 2000
 ANSWER_PREFIX = "User answered: "  # how AskUserTool words a received answer (worker/tools/interaction.py)
 _RETRY_NOTE = re.compile(r"after (\d+) automatic retr")
 _STOP_WORDS = ("stop", "cancel", "abort", "quit", "give up")
+_NOT_LOADED: Any = object()  # "the approval preview of this call has not been fetched yet"
 
 
 class ResumeError(Exception):
@@ -150,6 +154,7 @@ class AgentRunner:
         self._claim: dict | None = None
         self._verdict: Verdict | None = None
         self._approvals = {"requested": 0, "approved": 0, "denied": 0}
+        self._unsourced_blocked: set[tuple[str, str]] = set()  # values already rejected once for lacking a source
         self._obs = metrics.RunObserver()  # active gauge, run duration, human waits (worker/metrics.py)
         if hasattr(llm, "on_retry"):  # ResilientLLM: surface network waits in the UI and let cancel interrupt them
             llm.on_retry = self._on_llm_retry
@@ -368,8 +373,16 @@ class AgentRunner:
             return await self._finish_step(self._fail(step, "unknown_tool", f"Unknown tool '{step.tool}'. Available: {known}"))
         risk = self._classify(tool, step.args)
         step.risk = risk.value
-        if self.policy.needs_approval(tool, step.args, risk):
-            approved, note = await self._seek_approval(tool, step, risk)
+        preview, unsourced = _NOT_LOADED, []
+        if self.settings.PROVENANCE_CHECK and risk is not Risk.READ and tool.name not in INTERNAL_TOOLS:
+            preview = await self._preview(tool, step)
+            unsourced = self._unsourced_values(tool, step, preview)
+            if unsourced and not all(blocked_key(item) in self._unsourced_blocked for item in unsourced):
+                self._unsourced_blocked.update(blocked_key(item) for item in unsourced)  # a second time it goes to a human
+                note = UNSOURCED_VALUES_TEMPLATE.format(values=describe(unsourced))
+                return await self._finish_step(self._fail(step, "unsourced_values", note))
+        if unsourced or self.policy.needs_approval(tool, step.args, risk):  # unsourced again: a person decides, in any mode
+            approved, note = await self._seek_approval(tool, step, risk, preview, unsourced)
             if not approved:
                 text = DENIED_TEMPLATE.format(note=note or "no reason given")
                 return await self._finish_step(self._fail(step, "denied", text))
@@ -405,23 +418,44 @@ class AgentRunner:
 
     # ------------------------------------------------------------------ approval and questions
 
-    async def _seek_approval(self, tool: Tool, step: Step, risk: Risk) -> tuple[bool, str]:
+    async def _preview(self, tool: Tool, step: Step) -> list[dict[str, str]] | None:
+        """What a human is about to approve, e.g. the filled form fields; never blocks the call."""
+        try:
+            return await asyncio.wait_for(tool.approval_preview(step.args, self.ctx), timeout=5)
+        except Exception:  # noqa: BLE001 - a preview is a convenience only
+            return None
+
+    def _unsourced_values(self, tool: Tool, step: Step, preview: list[dict[str, str]] | None) -> list[dict[str, str]]:
+        """The values this write submits (the approval preview rows and what the tool adds) that appear in nothing the
+        run has read. The check is a safety net: any failure in it lets the call through."""
+        try:
+            rows = [*(preview or []), *tool.submitted_values(step.args, self.ctx)]
+            return find_unsourced(rows, SourceIndex(source_texts(self.state))) if rows else []
+        except Exception:  # noqa: BLE001
+            log.exception("value provenance check failed")
+            return []
+
+    async def _seek_approval(self, tool: Tool, step: Step, risk: Risk, preview: Any = _NOT_LOADED,
+                             unsourced: list[dict[str, str]] | None = None) -> tuple[bool, str]:
         action = tool.describe_action(step.args, self.ctx)
         context: dict[str, Any] = {"reason": step.thought, "facts": self.memory.render()}
-        try:  # what the human is about to approve, e.g. the filled form fields; never blocks the approval
-            preview = await asyncio.wait_for(tool.approval_preview(step.args, self.ctx), timeout=5)
-        except Exception:  # noqa: BLE001 - a preview is a convenience only
-            preview = None
+        if preview is _NOT_LOADED:
+            preview = await self._preview(tool, step)
         if preview:
             context["form_values"] = preview
         payload = {"tool": tool.name, "action": action, "args": step.args, "risk": risk.value, "context": context}
+        if unsourced:  # values with no source in the run: the card warns the approver
+            context["warning"] = UNSOURCED_APPROVAL_WARNING.format(values=describe(unsourced))
+            context["unsourced_values"] = unsourced
+            payload["unsourced_values"] = unsourced
         self._approvals["requested"] += 1
         response = await self._interact("approval", payload)
         response = response if isinstance(response, dict) else {}
         approved = bool(response.get("approved"))
         no_answer = not response
         note = str(response.get("note") or (self._no_response_reason() if no_answer else ""))
-        self.policy.record_response(tool, risk, response)
+        if not unsourced:  # "approve similar" never covers a call that carried unsourced values
+            self.policy.record_response(tool, risk, response)
         self._approvals["approved" if approved else "denied"] += 1
         by = response.get("by") if isinstance(response.get("by"), dict) else {}  # who answered (multi-user mode)
         who = f" by {by.get('name') or by.get('email')}" if by.get("name") or by.get("email") else ""
@@ -617,6 +651,7 @@ class AgentRunner:
             "claim": self._claim,
             "verdict": asdict(self._verdict) if self._verdict else None,
             "approvals": dict(self._approvals),
+            "unsourced_blocked": sorted([label, value] for label, value in self._unsourced_blocked),
             "resume_count": self._resume_count,
             "guards": self.guards.to_dict(),
             "policy": self.policy.to_dict(),
@@ -633,6 +668,7 @@ class AgentRunner:
         self._claim = runtime.get("claim")
         self._verdict = Verdict(**runtime["verdict"]) if runtime.get("verdict") else None
         self._approvals = {**self._approvals, **runtime.get("approvals", {})}
+        self._unsourced_blocked = {(label, value) for label, value in runtime.get("unsourced_blocked", [])}
         self._resume_count = runtime.get("resume_count", 0)
         self.guards = self._new_guards(runtime.get("guards"))
         if runtime.get("policy"):

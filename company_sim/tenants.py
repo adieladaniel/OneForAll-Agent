@@ -336,7 +336,8 @@ def delete_tenant(tenant_id: str) -> bool:
 
 
 def tenant_state(tenant_id: str = DEFAULT) -> dict:
-    """Ground truth of one tenant (what ``GET /admin/state`` returns): bills, sent mail, chaos flags, SIM_TODAY.
+    """Ground truth of one tenant (what ``GET /admin/state`` returns): bills, sent mail, the invoices and inbox the
+    sim actually holds, chaos flags, SIM_TODAY and the id of this simulator process (``config.INSTANCE_ID``).
 
     Reads the tenant's database directly, with no HTTP and no login; this is what evals compare the agent against.
     """
@@ -345,6 +346,7 @@ def tenant_state(tenant_id: str = DEFAULT) -> dict:
 
     with use_tenant(tenant_id) as tenant:
         return {
-            "tenant": tenant.id, "sim_today": config.SIM_TODAY.isoformat(), "seed_salt": tenant.seed_salt,
-            "chaos": sorted(chaos_flags.active()), "bills": state.get_bills(), "sent_mail": state.get_sent_mail(),
+            "tenant": tenant.id, "instance_id": config.INSTANCE_ID, "sim_today": config.SIM_TODAY.isoformat(),
+            "seed_salt": tenant.seed_salt, "chaos": sorted(chaos_flags.active()), "bills": state.get_bills(),
+            "sent_mail": state.get_sent_mail(), "invoices": state.invoice_rows(), "inbox": state.get_inbox(),
         }

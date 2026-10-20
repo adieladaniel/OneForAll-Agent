@@ -309,7 +309,7 @@ async def test_runner_persists_steps_facts_events_and_runtime_through_the_store(
     runtime = await store.load_runtime(run_id)
     assert runtime["turn"] == 2 and runtime["verdict"]["passed"] and runtime["claim"]["summary"] == "All done."
     assert set(runtime) == {"turn", "text_only", "force_tool", "nudges", "feedback", "verify_failures", "claim",
-                            "verdict", "approvals", "resume_count", "guards", "policy"}
+                            "verdict", "approvals", "unsourced_blocked", "resume_count", "guards", "policy"}
     json.dumps(runtime)
 
 

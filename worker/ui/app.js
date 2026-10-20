@@ -395,6 +395,13 @@ function pendingTitle(text, iconName) {
 function contextBlock(ctx) {
   if (!ctx) return null;
   const parts = [];
+  if (ctx.warning) {
+    const unsourced = Array.isArray(ctx.unsourced_values) ? ctx.unsourced_values : [];
+    parts.push(h("div", { class: "unsourced-warning", role: "alert" },
+      h("div", { class: "unsourced-title" }, "Values with no source in this run"),
+      h("p", null, String(ctx.warning)),
+      unsourced.length ? h("ul", null, unsourced.map((u) => h("li", null, `${u.label}: ${u.value}`))) : null));
+  }
   if (Array.isArray(ctx.form_values) && ctx.form_values.length) {
     parts.push(h("div", { class: "form-values" },
       h("div", { class: "form-values-title" }, "Values to be submitted"),

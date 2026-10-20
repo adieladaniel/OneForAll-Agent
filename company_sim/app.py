@@ -58,4 +58,6 @@ async def landing(request: Request):
 
 @app.get("/healthz", include_in_schema=False)
 async def healthz() -> dict:
-    return {"status": "ok"}
+    """Liveness plus the identity of this process (see ``config.INSTANCE_ID``): which simulator, which date, which data."""
+    return {"status": "ok", "instance_id": config.INSTANCE_ID, "sim_today": config.SIM_TODAY.isoformat(),
+            "data_dir": str(config.DATA_DIR), "pid": os.getpid(), "started_at": config.STARTED_AT}

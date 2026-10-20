@@ -2,7 +2,8 @@
 from __future__ import annotations
 
 import os
-from datetime import date
+import secrets
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -21,6 +22,11 @@ BASE_URL = f"http://localhost:{PORT}"
 SIM_TODAY: date = (
     date.fromisoformat(os.environ["SIM_TODAY"]) if os.environ.get("SIM_TODAY") else date.today()
 )
+
+# Identity of this simulator process, shown on /healthz and /admin/state. Random per process start unless SIM_INSTANCE_ID
+# is set, so a client (the eval harness) can tell this simulator from a stale or second one answering on the same port.
+INSTANCE_ID: str = os.environ.get("SIM_INSTANCE_ID", "").strip() or secrets.token_hex(8)
+STARTED_AT: str = datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 SESSION_SECRET = "company-sim-dev-secret"  # dev-only; signs session cookies
 

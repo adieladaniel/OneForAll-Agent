@@ -86,6 +86,12 @@ class Tool(ABC):
         Must be read-only and cheap; the runner treats any failure as "no preview"."""
         return None
 
+    def submitted_values(self, args: dict, ctx: ToolContext) -> list[dict[str, str]]:
+        """Optional ``[{"label", "value"}]`` rows of data this call sends, beyond ``approval_preview`` (for example the
+        body of an HTTP request). The runner checks both against what the run has read (``worker/agent/provenance.py``)
+        before a write runs or is shown to a human. Must be synchronous, read-only and cheap."""
+        return []
+
     @abstractmethod
     async def run(self, args: dict, ctx: ToolContext) -> ToolResult:
         """Execute the tool. May raise; ``execute_with_retry`` converts exceptions to results."""

@@ -68,6 +68,8 @@ fields empty when no source has the value.
 - If you cannot find something, say so; do not guess or fill in plausible values. This includes logins: never \
 try a guessed username or password; use the credentials tools or the workspace file. Once a value is in your \
 working memory, use it instead of reading the same file again.
+- Every date, amount and ID you submit is checked against what you have read in this run; a value with no source \
+is rejected. Re-read the source document instead of typing from memory.
 
 ## Approvals and safety
 Some actions (writes, irreversible steps) are paused for human approval automatically; you do not request approval \
@@ -157,6 +159,14 @@ FINISH_NOT_ALONE = (
     "Review those results, then call `finish` again."
 )
 SKIPPED_AFTER_FAILURE = "Skipped: an earlier call in this turn failed or was denied. Re-plan, then retry if still needed."
+UNSOURCED_VALUES_TEMPLATE = (
+    "Not submitted: these values do not appear in anything you have read in this run: {values}. Open the source "
+    "document again, correct the fields, then submit."
+)
+UNSOURCED_APPROVAL_WARNING = (
+    "WARNING: the agent is submitting values that appear nowhere in what it read in this run: {values}. It was told "
+    "once to re-check them and sent them again. Approve only if you know they are correct."
+)
 DENIED_TEMPLATE = (
     "User DENIED this action. Note: {note}. Do not retry the same action; adapt or ask the user."
 )

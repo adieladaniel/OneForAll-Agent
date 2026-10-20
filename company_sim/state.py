@@ -56,3 +56,17 @@ def latest_invoice_for(vendor_name: str) -> dict | None:
     """Most recent invoice (by issue date) for an exact vendor name, even if hidden from the portal."""
     rows = list_invoices(vendor_name)
     return get_invoice(rows[0]["number"]) if rows else None
+
+
+def invoice_rows() -> list[dict]:
+    """Every invoice (including portal-hidden ones) as plain rows, in internal-id order: what the vendor portal serves from."""
+    rows = db.query(
+        "SELECT i.number, v.name AS vendor, i.issue_date, i.due_date, i.amount, i.currency, i.status, i.portal_visible"
+        " FROM invoices i JOIN vendors v ON v.id = i.vendor_id ORDER BY i.id")
+    return [{**r, "portal_visible": bool(r["portal_visible"])} for r in rows]
+
+
+def get_inbox() -> list[dict]:
+    """Messages in the Inbox folder, oldest first."""
+    return db.query("SELECT id, sender, recipient, subject, body, sent_at, attachment_invoice, is_read"
+                    " FROM emails WHERE folder = 'inbox' ORDER BY id")

@@ -287,7 +287,8 @@ async def test_write_requiring_approval_approved(registry, settings, save_tool):
 async def test_approval_context_carries_the_tool_preview_and_survives_a_broken_preview(registry, settings, save_tool):
     save_tool.approval_preview = _async_returning([{"label": "Issue date", "value": "2026-09-28"}])
     llm = make_llm(worker=[reply("Save it.", call("save_record", value="v")), reply("Done.", finish_call("blocked", "stop"))])
-    h = Harness(llm, registry, settings, broker=AutoBroker.approve_all())
+    h = Harness(llm, registry, settings, broker=AutoBroker.approve_all(),
+                task="Save the bill with issue date 2026-09-28")
     await h.run()
     assert h.of("approval_requested")[0]["context"]["form_values"] == [{"label": "Issue date", "value": "2026-09-28"}]
 
@@ -296,7 +297,8 @@ async def test_approval_context_carries_the_tool_preview_and_survives_a_broken_p
 
     save_tool.approval_preview = broken
     llm = make_llm(worker=[reply("Save it.", call("save_record", value="v")), reply("Done.", finish_call("blocked", "stop"))])
-    h = Harness(llm, registry, settings, broker=AutoBroker.approve_all())
+    h = Harness(llm, registry, settings, broker=AutoBroker.approve_all(),
+                task="Save the bill with issue date 2026-09-28")
     await h.run()
     request = h.of("approval_requested")[0]
     assert "form_values" not in request["context"] and request["context"]["reason"] == "Save it."

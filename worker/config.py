@@ -52,6 +52,9 @@ class Settings(BaseSettings):
     MAX_STEPS: int = 60
     MAX_CONSECUTIVE_FAILURES: int = 4
     RUN_TIMEOUT_S: int = 900
+    # Before a write runs or is sent for approval, every data-like value it submits (dates, amounts, ids) must appear in
+    # something the run read (worker/agent/provenance.py). False switches the check off.
+    PROVENANCE_CHECK: bool = True
 
     # Deployment (all opt-in; see README 1.6, "hosting a demo container"). Off by default, so local dev is unchanged.
     ACCESS_PASSWORD: str = ""       # set -> every route needs a login (signed session cookie)

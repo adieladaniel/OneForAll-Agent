@@ -14,6 +14,18 @@ TIMEOUT_S = 20.0
 IDEMPOTENT_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 
 
+def _flatten(node: object, path: str, rows: list[dict[str, str]]) -> None:
+    """Append a ``{"label": path, "value": text}`` row for every string or number inside ``node``."""
+    if isinstance(node, dict):
+        for key, child in node.items():
+            _flatten(child, f"{path}.{key}" if path else str(key), rows)
+    elif isinstance(node, list):
+        for i, child in enumerate(node):
+            _flatten(child, f"{path}[{i}]", rows)
+    elif isinstance(node, (str, int, float)) and not isinstance(node, bool):
+        rows.append({"label": path or "body", "value": str(node)})
+
+
 class HttpRequestTool(Tool):
     """Call an HTTP API on an allowlisted host (e.g. the internal ERP's REST API)."""
 
@@ -61,6 +73,15 @@ class HttpRequestTool(Tool):
         body = f" with body {json.dumps(args['json_body'], ensure_ascii=False)}" if args.get("json_body") else ""
         auth = f" using credential {args['auth_credential']}" if args.get("auth_credential") else ""
         return f"{str(args.get('method', 'GET')).upper()} {args.get('url')}{body}{auth}"
+
+    def submitted_values(self, args: dict, ctx: ToolContext) -> list[dict[str, str]]:
+        """The leaves of the JSON body and the query of a request that changes something, labelled by their path."""
+        if self.classify(args, ctx) is Risk.READ:
+            return []
+        rows: list[dict[str, str]] = []
+        for part in ("json_body", "query"):
+            _flatten(args.get(part), "" if part == "json_body" else "query", rows)
+        return rows
 
     async def run(self, args: dict, ctx: ToolContext) -> ToolResult:
         method = str(args["method"]).upper()

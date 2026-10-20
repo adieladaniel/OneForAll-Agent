@@ -222,6 +222,10 @@ textarea:focus, select:focus, input[type="text"]:focus { outline: 2px solid var(
 .kv tr:first-child td { border-top: 0; }
 .kv td:first-child { width: 28%; color: var(--muted); font-family: var(--mono); font-size: 12px; white-space: nowrap; }
 .kv td:last-child { font-family: var(--mono); font-size: 12.5px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.unsourced-warning { margin-top: 8px; padding: 8px 10px; border: 1px solid #c0392b; border-radius: 8px; background: #fdecea; color: #7a1c12; font-size: 13px; }
+.unsourced-warning p { margin: 4px 0; }
+.unsourced-warning ul { margin: 4px 0 0; padding-left: 18px; font-family: var(--mono); font-size: 12.5px; }
+.unsourced-title { font-weight: 700; }
 .form-values-title { font-weight: 600; font-size: 13px; color: #7c3d00; margin-top: 8px; }
 .pending-card .kv {background: rgba(255, 255, 255, 0.7); border-radius: 8px; }
 details.context { margin-top: 8px; font-size: 13px; }

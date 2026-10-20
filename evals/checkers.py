@@ -4,7 +4,8 @@ Every checker is a pure function ``(run_state, sim_state, **params) -> CheckResu
 
 * ``run_state`` is ``RunState.to_dict()`` of the agent run (status, final_report, steps ...).
 * ``sim_state`` comes from ``evals.simstate.build_sim_state``: bills / sent mail after the run, the same before the run
-  (``baseline_*``), and the invoices / inbox the sim was seeded with.
+  (``baseline_*``), and the invoices / inbox the sim actually holds (read from its data, cross-checked against the seed
+  formula; a snapshot whose ``env_errors`` is not empty is never graded, see ``evals.run``).
 
 Success is judged only from what is in the sim's data. The agent's own claims are used for exactly two things: the
 scenarios that are *about* honest reporting (duplicate, denied approval), and "false success" detection, where an

@@ -8,6 +8,9 @@ from __future__ import annotations
 
 import itertools
 import json
+import os
+import subprocess
+import sys
 from datetime import date
 
 import pytest
@@ -43,8 +46,17 @@ _ids = itertools.count(2000)
 # --------------------------------------------------------------------------- synthetic builders
 
 
-def snapshot(chaos_flags=(), bills=(), sent=(), baseline_bills=(), baseline_sent=()) -> dict:
-    admin = {"sim_today": TODAY, "chaos": list(chaos_flags), "bills": list(bills), "sent_mail": list(sent)}
+def seeded_rows(today: str = TODAY, chaos_flags=(), salt: str = "") -> dict:
+    """The invoices and inbox rows a freshly seeded sim reports in its state (here built from the seed formula)."""
+    day = date.fromisoformat(today)
+    invoices = simstate.expected_invoices(day, set(chaos_flags), salt)
+    inbox = [{**m, "id": n} for n, m in enumerate(simstate.expected_inbox(day, invoices), start=1)]
+    return {"invoices": invoices, "inbox": inbox}
+
+
+def snapshot(chaos_flags=(), bills=(), sent=(), baseline_bills=(), baseline_sent=(), rows=None) -> dict:
+    admin = {"sim_today": TODAY, "chaos": list(chaos_flags), "bills": list(bills), "sent_mail": list(sent),
+             **(rows or seeded_rows(TODAY, chaos_flags))}
     baseline = {"bills": list(baseline_bills), "sent_mail": list(baseline_sent)}
     return build_sim_state(admin, baseline)
 
@@ -465,6 +477,8 @@ def test_derived_invoices_match_the_sim_database(sim, flags):
         assert row["amount"] == pytest.approx(inv["amount"]) and bool(row["portal_visible"]) == inv["portal_visible"]
     assert latest_invoice(snap["invoices"], "Company X Ltd")["number"] == state.latest_invoice_for("Company X Ltd")["number"]
     assert baseline["sim_today"] == config.SIM_TODAY.isoformat() and sorted(baseline["chaos"]) == sorted(flags)
+    assert snap["env_errors"] == []  # the sim's actual rows agree with the seed formula
+    assert snap["invoices"] == baseline["invoices"] and snap["inbox"] == baseline["inbox"]  # graded from the sim's own rows
 
 
 def test_real_sim_invoice_entry_before_and_after(sim):
@@ -538,6 +552,205 @@ def test_real_sim_denied_writes_baseline(sim):
     assert CHECKERS["denied_writes"](run_state("needs_attention", "Denied."), current(sim, baseline)).passed
     post_bill(sim, latest_invoice(build_sim_state(baseline)["invoices"], "Company X Ltd"))
     assert not CHECKERS["denied_writes"](run_state("needs_attention", "Denied."), current(sim, baseline)).passed
+
+
+# --------------------------------------------------------------------------- grading from the sim's actual data
+
+
+def test_state_endpoints_report_actual_rows_and_the_instance_id(sim):
+    health = sim.get("/healthz").json()
+    assert health["status"] == "ok" and health["instance_id"] == config.INSTANCE_ID
+    assert health["sim_today"] == config.SIM_TODAY.isoformat() and health["data_dir"] == str(config.DATA_DIR)
+    assert health["pid"] and health["started_at"]
+
+    default = sim.get("/admin/state").json()
+    tenant = sim.post("/admin/tenants", json={"tenant_id": "rows"}).json()
+    other = sim.get(f"/admin/tenants/{tenant['tenant_id']}/state").json()
+    for st in (default, other):
+        assert st["instance_id"] == config.INSTANCE_ID
+        assert len(st["invoices"]) == 14 and len(st["inbox"]) == 8
+        assert set(st["invoices"][0]) == {"number", "vendor", "issue_date", "due_date", "amount", "currency", "status", "portal_visible"}
+        assert isinstance(st["invoices"][0]["portal_visible"], bool)
+        assert {"sender", "subject", "sent_at", "body"} <= set(st["inbox"][0])
+    assert default["invoices"] != other["invoices"]  # the tenant's salt changes the amounts
+
+
+def test_sim_instance_id_comes_from_the_environment_or_is_random():
+    def instance(env_id):
+        env = {k: v for k, v in os.environ.items() if k != "SIM_INSTANCE_ID"}
+        if env_id:
+            env["SIM_INSTANCE_ID"] = env_id
+        code = "from company_sim import config; print(config.INSTANCE_ID)"
+        return subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env, check=True).stdout.strip()
+
+    assert instance("fixed-id-7") == "fixed-id-7"
+    first, second = instance(None), instance(None)
+    assert first and second and first != second  # random per process start
+
+
+def test_build_sim_state_grades_from_the_actual_rows():
+    rows = seeded_rows()
+    rows["invoices"] = [{**i, "row_marker": True} for i in rows["invoices"]]  # only the sim's own rows carry this
+    for inv in rows["invoices"]:
+        if inv["number"] == "INI-20502":
+            inv["amount"] += 0.004  # within the tolerance of the cross-check, so the rows are still accepted
+    sim_state = build_sim_state({"sim_today": TODAY, "chaos": [], "bills": [], "sent_mail": [], **rows})
+    assert sim_state["env_errors"] == []
+    assert sim_state["invoices"] == rows["invoices"] and sim_state["inbox"] == rows["inbox"]
+    assert all(i["row_marker"] for i in sim_state["invoices"])
+
+
+def test_baseline_rows_are_the_ground_truth_not_the_final_snapshot():
+    baseline = {"bills": [], "sent_mail": [], **seeded_rows()}
+    final = {"sim_today": TODAY, "chaos": [], "bills": [], "sent_mail": [], **seeded_rows()}
+    for inv in final["invoices"]:
+        inv["status"] = "paid"  # something changed the data after the reset
+    sim_state = build_sim_state(final, baseline)
+    assert sim_state["env_errors"] == [] and sim_state["invoices"] == baseline["invoices"]
+
+
+def _tampered(change) -> dict:
+    rows = seeded_rows()
+    change(rows)
+    return build_sim_state({"sim_today": TODAY, "chaos": [], "bills": [], "sent_mail": [], **rows})
+
+
+def _edit(number, **fields):
+    def change(rows):
+        for inv in rows["invoices"]:
+            if inv["number"] == number:
+                inv.update(fields)
+    return change
+
+
+@pytest.mark.parametrize("change,fragments", [
+    (_edit("INI-20502", due_date="2026-11-01", issue_date="2026-10-02"),
+     ["INI-20502", "due_date is '2026-11-01'", "issue_date is '2026-10-02'", "seed formula gives"]),
+    (_edit("GLX-88213", amount=1.0), ["GLX-88213", "amount is 1.0"]),
+    (_edit("STK-1244", portal_visible=False), ["STK-1244", "portal_visible is False"]),
+    (lambda rows: rows["invoices"].pop(0), ["missing from the sim's data"]),
+    (lambda rows: rows["invoices"].append({**rows["invoices"][0], "number": "ZZZ-1"}), ["ZZZ-1", "not in the seed formula"]),
+    (lambda rows: rows["inbox"][6].update(sent_at="2026-10-13T15:22"),
+     ["Question: payment date for INI-20502", "sent_at is '2026-10-13T15:22'"]),
+    (lambda rows: rows["inbox"].pop(), ["inbox mail", "missing from the sim's data"]),
+])
+def test_formula_vs_actual_mismatch_is_an_environment_error(change, fragments):
+    sim_state = _tampered(change)
+    text = " | ".join(sim_state["env_errors"])
+    assert sim_state["env_errors"], "a mismatch must be reported"
+    for fragment in fragments:
+        assert fragment in text, (fragment, text)
+
+
+def test_missing_rows_and_mixed_up_snapshots_are_environment_errors():
+    bare = build_sim_state({"sim_today": TODAY, "chaos": [], "bills": [], "sent_mail": []})
+    assert bare["invoices"] == [] and "no invoices/inbox rows" in bare["env_errors"][0]
+    final = {"sim_today": TODAY, "chaos": [], "bills": [], "sent_mail": [], "instance_id": "new", **seeded_rows()}
+    before = {"bills": [], "sent_mail": [], "instance_id": "old", **seeded_rows()}
+    mixed = build_sim_state(final, before)
+    assert any("instance_id" in e and "old" in e and "new" in e for e in mixed["env_errors"])
+    earlier = {"bills": [], "sent_mail": [], "instance_id": "new", "sim_today": "2026-10-01", **seeded_rows("2026-10-01")}
+    assert any("sim_today" in e for e in build_sim_state(final, earlier)["env_errors"])
+
+
+def test_a_pinned_sim_today_is_graded_from_the_rows_the_sim_holds(tmp_path, monkeypatch):
+    """A sim started with SIM_TODAY pinned to another date seeds other dates; the checkers follow the rows it holds."""
+    monkeypatch.setattr(config, "SIM_TODAY", date(2026, 10, 16))
+    monkeypatch.setattr(config, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(config, "DB_PATH", tmp_path / "sim.db")
+    monkeypatch.setattr(config, "PDF_DIR", tmp_path / "pdfs")
+    from company_sim.app import app
+
+    chaos.set_flags([])
+    with TestClient(app) as client:
+        client.post("/admin/reset", json={"chaos": []})
+        baseline = simstate.fetch_admin_state(http=client)
+        assert baseline["sim_today"] == "2026-10-16"
+        ini = next(i for i in baseline["invoices"] if i["number"] == "INI-20502")
+        assert ini["issue_date"] == "2026-10-02" and ini["due_date"] == "2026-11-01"
+        question = next(m for m in baseline["inbox"] if "INI-20502" in m["subject"])
+        assert question["sent_at"].startswith("2026-10-13")
+        assert build_sim_state(baseline, baseline)["env_errors"] == []
+
+        client.post("/mail/login", data={"username": config.MAIL_USER, "password": config.MAIL_PASSWORD})
+        client.post("/mail/compose", data={"to": "accounts@initech.example", "subject": "Re: INI-20502",
+                                           "body": "INI-20502 is due on 1 November 2026."})
+        done = build_sim_state(simstate.fetch_admin_state(http=client), baseline)
+        assert CHECKERS["reply_payment_date"](run_state(), done).passed
+
+        # the date a formula for 2026-10-19 would demand (4 November) is wrong for the data this sim holds
+        wrong = build_sim_state({**baseline, "sent_mail": [mail("accounts@initech.example", "INI-20502 is due on 4 November 2026.")]}, baseline)
+        assert not CHECKERS["reply_payment_date"](run_state(), wrong).passed
+    chaos.set_flags([])
+
+
+# --------------------------------------------------------------------------- environment errors and identity in run_scenario
+
+
+async def test_run_scenario_reports_an_environment_error_instead_of_grading(harness, sim, monkeypatch):
+    """The evidence case: the sim holds due 2026-11-01 (what the agent saw) but the seed formula says 2026-11-04."""
+    settings, use_llm = harness
+
+    def stale(base_url="", http=None, fallback_flags=None):
+        st = simstate.fetch_admin_state(http=sim)
+        st["invoices"] = [{**i, "due_date": "2026-11-01"} if i["number"] == "INI-20502" else i for i in st["invoices"]]
+        return st
+
+    verdict = _reply(_call("submit_verdict", passed=True, summary="ok", checks=[{"criterion": "x", "passed": True, "observed": "y"}],
+                           ambiguity={"passed": True, "observed": "-"}, completeness={"passed": True, "observed": "-"}))
+    use_llm(_routed([_reply(_call("finish", status="success", summary="Replied: INI-20502 is due 2026-11-01."))], [verdict]))
+    monkeypatch.setattr(eval_run, "fetch_admin_state", stale)
+    result = await eval_run.run_scenario(_scenario("reply_payment_date"), settings, "http://sim.invalid")
+    assert result["outcome"] == "env_error" and result["passed"] is False and result["score"] == 0.0
+    assert result["agent_status"] == "succeeded"  # the agent claimed success, but this is not graded as a false success
+    assert any("INI-20502" in e and "due_date is '2026-11-01'" in e for e in result["env_errors"])
+    assert result["details"] and all(d.startswith("ENV ERROR") for d in result["details"])
+    assert result["instance_id"] == config.INSTANCE_ID and result["sim_today"] == config.SIM_TODAY.isoformat()
+    summary = eval_run.summarize([result])
+    assert (summary["graded"], summary["passed"], summary["env_errors"], summary["false_successes"]) == (0, 0, 1, 0)
+
+
+async def test_run_scenario_verifies_the_instance_before_the_scenario_and_before_grading(harness, monkeypatch):
+    settings, use_llm = harness
+    calls: list[tuple[str, str]] = []
+    monkeypatch.setattr(eval_run, "ensure_instance", lambda base_url, instance_id: calls.append((base_url, instance_id)) or {})
+    use_llm(_routed([_reply(_call("finish", status="blocked", summary="I was not allowed to create the bill."))], []))
+    result = await eval_run.run_scenario(_scenario("deny_write"), settings, "http://sim.invalid", instance_id=config.INSTANCE_ID)
+    assert result["outcome"] == "pass" and result["instance_id"] == config.INSTANCE_ID
+    assert calls == [("http://sim.invalid", config.INSTANCE_ID)] * 2  # once before the scenario, once right before grading
+
+
+async def test_run_scenario_aborts_when_a_second_sim_shows_up_during_the_run(harness, monkeypatch):
+    settings, use_llm = harness
+    seen = {"n": 0}
+
+    def check(base_url, instance_id):
+        seen["n"] += 1
+        if seen["n"] == 2:  # fine before the scenario; a second sim appeared while the agent worked
+            raise eval_run.SimSetupError("a different simulator answers at http://[::1]:8001")
+
+    monkeypatch.setattr(eval_run, "ensure_instance", check)
+    use_llm(_routed([_reply(_call("finish", status="blocked", summary="I was not allowed to create the bill."))], []))
+    with pytest.raises(eval_run.SimSetupError, match=r"\[::1\]"):
+        await eval_run.run_scenario(_scenario("deny_write"), settings, "http://sim.invalid", instance_id=config.INSTANCE_ID)
+
+
+async def test_run_scenario_rejects_state_that_came_from_another_instance(harness, monkeypatch):
+    settings, use_llm = harness
+    monkeypatch.setattr(eval_run, "ensure_instance", lambda base_url, instance_id: {})
+    use_llm(_routed([_reply(_call("finish", status="blocked", summary="no"))], []))
+    with pytest.raises(eval_run.SimSetupError, match="not from this run's instance other-instance"):
+        await eval_run.run_scenario(_scenario("deny_write"), settings, "http://sim.invalid", instance_id="other-instance")
+
+
+async def test_state_read_from_a_local_database_file_is_never_trusted_with_an_instance_id(harness, monkeypatch):
+    settings, use_llm = harness
+    monkeypatch.setattr(eval_run, "ensure_instance", lambda base_url, instance_id: {})
+    monkeypatch.setattr(eval_run, "fetch_admin_state", lambda base_url="", http=None, fallback_flags=None: {
+        **simstate._direct_admin_state([]), "instance_id": None})
+    use_llm(_routed([_reply(_call("finish", status="blocked", summary="no"))], []))
+    with pytest.raises(eval_run.SimSetupError, match="local database file"):
+        await eval_run.run_scenario(_scenario("deny_write"), settings, "http://sim.invalid", instance_id="abc")
 
 
 # --------------------------------------------------------------------------- runner glue (scripted LLM, real sim)
@@ -621,7 +834,8 @@ def _record(sid="invoice_happy", outcome="pass", passed=True, score=1.0, **over)
             "details": ["PASS: ok"] if passed else ["FAIL: exactly one bill exists (found 0)"], "agent_summary": "Done.",
             "steps": 7, "llm_calls": 12, "tokens": 3456, "retries": 1, "tool_failures": 0, "llm_retries": 0,
             "approvals_requested": 1, "approvals_approved": 1, "questions": 0, "approval_log": [], "question_log": [],
-            "duration_s": 42.4, "error": "", "sim_today": TODAY, "show_repeat": False}
+            "duration_s": 42.4, "error": "", "sim_today": TODAY, "show_repeat": False,
+            "instance_id": "abc123", "env_errors": []}
     return {**base, **over}
 
 
@@ -645,6 +859,30 @@ def test_summary_markdown_and_files(tmp_path):
     data = json.loads(json_path.read_text(encoding="utf-8"))
     assert data["summary"]["passed"] == 1 and len(data["results"]) == 3 and data["meta"]["provider"] == "gemini"
     assert md_path.read_text(encoding="utf-8") == md
+
+
+def test_environment_errors_are_counted_separately_and_shown(tmp_path):
+    line = "invoice INI-20502: due_date is '2026-11-01' in the sim's data, the seed formula gives '2026-11-04'"
+    env = _record("reply_payment_date", "env_error", False, 0.0, agent_status="succeeded", env_errors=[line],
+                  details=[f"ENV ERROR: {line}"])
+    results = [_record(), _record("invoice_duplicate", "fail", False, 0.0), env]
+    summary = eval_run.summarize(results)
+    assert (summary["runs"], summary["graded"], summary["passed"], summary["env_errors"], summary["false_successes"]) == (3, 2, 1, 1, 0)
+    assert summary["mean_score"] == pytest.approx(0.5)  # the environment error is not averaged in
+
+    text = eval_run.render_text(results)
+    assert "ENV ERROR" in text and "1/2 passed" in text and "1 environment error(s)" in text
+    assert "due_date is '2026-11-01'" in text and "FALSE SUCCESS" not in text
+    meta = {"started_at": "2026-10-03 12:00", "started_at_file": "20261003-120000", "provider": "p", "model": "m",
+            "sim_today": TODAY, "instance_id": "abc123"}
+    md = eval_run.render_markdown(results, meta)
+    assert "| ENV ERROR |" in md and "1/2 passed" in md and "1 environment error(s)" in md and "sim instance abc123" in md
+    assert "Environment errors" in md and "due_date is '2026-11-01'" in md
+    failures = md.split("Failures:")[1]
+    assert "invoice_duplicate" in failures and "reply_payment_date" not in failures  # not listed as a failure
+    json_path, _ = eval_run.write_results(results, meta, tmp_path)
+    data = json.loads(json_path.read_text(encoding="utf-8"))
+    assert data["summary"]["env_errors"] == 1 and data["results"][2]["instance_id"] == "abc123"
 
 
 def test_missing_api_key_exits_with_code_2(monkeypatch, capsys):

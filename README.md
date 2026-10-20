@@ -38,7 +38,7 @@ It runs against a simulated company (mail inbox, vendor billing portal, internal
 
 <table>
   <tr>
-    <td align="center" width="25%"><img src="https://img.shields.io/badge/tests-676-4f46e5?style=for-the-badge" alt="tests: 676"><br><sub>automated tests, run with a scripted model and no API key</sub></td>
+    <td align="center" width="25%"><img src="https://img.shields.io/badge/tests-771-4f46e5?style=for-the-badge" alt="tests: 771"><br><sub>automated tests, run with a scripted model and no API key</sub></td>
     <td align="center" width="25%"><img src="https://img.shields.io/badge/soak%20runs-280%2F280-0f766e?style=for-the-badge" alt="soak runs: 280/280"><br><sub>succeeded and passed ground truth, through a worker kill and an API restart</sub></td>
     <td align="center" width="25%"><img src="https://img.shields.io/badge/isolation%20leaks-0-0f766e?style=for-the-badge" alt="isolation leaks: 0"><br><sub>across 47,508 responses in the soak (about 118,000 scanned in all profiles)</sub></td>
     <td align="center" width="25%"><img src="https://img.shields.io/badge/roles-5-4f46e5?style=for-the-badge" alt="roles: 5"><br><sub>viewer, approver, operator, admin, owner, with separation of duties</sub></td>
@@ -370,6 +370,7 @@ flowchart TD
 | `state.py` | `Step`, `Fact` and `PlanItem` recorded through a `RunStore` after every step |
 | `guards.py` | Failure streak, repetition, step budget, timeout (human waits do not count) |
 | `verifier.py` | Fresh-context auditor with read-only tools, and its verdict |
+| `provenance.py` | Checks that the values a write submits appear in something the agent read (section 5) |
 | redaction | Vault secrets are scrubbed from everything stored, emitted or sent to the model |
 
 Tools: `browser_*` (Playwright), `list_files`, `read_file`, `write_file`, `http_request`, `remember`, `recall`, `list_credentials`, `browser_fill_secret`, `update_plan`, `ask_user`, `finish`.
@@ -584,6 +585,7 @@ Every tenant-owned table carries an `org_id`, and the run store, approval store 
 - **Transient vs. semantic errors, idempotency-aware retries.** See [3.8](#38-transient-vs-semantic-errors-handled-at-different-layers): transient failures of repeat-safe calls are retried with backoff in the tool layer; a failed write is never re-sent blindly (the agent is told to check whether it took effect); semantic errors go back to the model with an actionable message.
 - **Guards.** Step budget, active-time timeout, failure streaks, repetition detection, escalation to a human instead of thrashing ([3.7](#37-guards-that-escalate-to-a-human-instead-of-thrashing)).
 - **An independent verifier** with fresh context and read-only tools, feeding failures back for up to two correction rounds ([3.6](#36-an-independent-verifier-with-fresh-context-and-read-only-tools)). It can sign in through the vault (`browser_fill_secret` into the fields of a login form, then the "Sign in" click, which is classified read) but is still refused everything else, so a resumed run's fresh browser does not blind the audit; the first audit after a resume now passes.
+- **Value provenance before writes.** Before a write runs or is sent for approval, every data-like value about to be submitted (dates, amounts, IDs, and the dates and amounts inside free text such as an e-mail body) must appear in something the agent actually read in this run: an earlier observation, a file it opened, an answer from the user, the task text, or its working memory. Formats are normalized first ("12 November 2026" matches 2026-11-12, "6,414.10 EUR" matches 6414.1). An unsourced value blocks the write with a note naming it; if the agent submits the same value again, the write goes to a person with a warning on the approval card, even in automatic approval mode ([worker/agent/provenance.py](worker/agent/provenance.py), `PROVENANCE_CHECK`). It proves a value was seen somewhere, not that it was taken from the right field.
 - **Crash recovery.** A worker holds a run through a *lease* it renews with a *heartbeat* (every third of `JOB_LEASE_S`). If the worker dies, its leases expire; every worker also runs a *reaper* that puts expired runs back in the queue (`FOR UPDATE SKIP LOCKED`, so reapers do not collide), and the next claim *resumes* from the checkpoint with a note that the browser was restarted. After `JOB_MAX_ATTEMPTS` claims the run ends `needs_attention` ("lost too many times"). A graceful stop (Ctrl+C, SIGTERM) hands runs back without using an attempt; `--drain` lets them finish instead. If a heartbeat finds the lease gone, the old worker is *fenced* (its writes are dropped) and cancels the run locally. Load-tested: a hard worker kill with four runs in flight, twice, all four resumed and succeeded each time ([section 7](#7-scale-and-proof)).
 - **Durable approvals.** An approval is a row. Any API process can record the answer; the **first writer wins** (a second answer is a 409); an answer past its deadline is refused. A request expires after `approval_timeout_s` (an org setting, default 1 hour): the run then ends `needs_attention` with "approval expired after N min" rather than guessing. API restarts lose nothing; a resumed run **re-attaches** to its still-open request (or takes an answer that arrived while no worker was waiting) instead of asking twice, and cancels a leftover request the resumed agent no longer asks for.
 - **Service restarts.** Sessions and approvals are in PostgreSQL, so an API restart only drops open WebSockets (clients reconnect and replay); a database restart pauses the listeners, which reconnect and re-read.
@@ -717,6 +719,8 @@ python -m evals.run --parallel 3                     # 3 scenarios at once, each
 
 Other flags: `--headed`, `--provider gemini|ollama`, `--sim-url`, `--scenarios-dir`. The runner starts the simulator itself if nothing is listening on `SIM_BASE_URL`, resets it with each scenario's chaos flags, runs the real agent in-process with scripted approvals and answers, then judges the result from the simulator's data, never from the agent's claim: if the agent says `succeeded` while the ground truth disagrees, it is flagged as a **false success**. It needs a valid `GEMINI_API_KEY`, makes real LLM calls, and takes several minutes on the free tier. Results print as a table and are written to `evals/results/latest.md` (plus a timestamped JSON). Exit code: 0 all passed, 1 some failed, 2 setup problem.
 
+The harness also makes sure it grades the simulator it is talking to. Every simulator process has an instance id on `/healthz`; before each scenario and again before grading, the harness checks that the address in `SIM_BASE_URL`, and every address `localhost` resolves to (127.0.0.1 and ::1), either answers with that id or refuses, and it stops with exit code 2 if a second or stale simulator answers anywhere. Ground truth comes from the simulator's own rows (`GET /admin/state` returns its invoices and inbox), cross-checked against the seed formula; if the two disagree the scenario is reported as **ENV ERROR** and is not graded or counted.
+
 **Real-Gemini results, free tier, one run per scenario.** Latest full table: [evals/results/latest.md](evals/results/latest.md). Each round's traces drove the fixes for the next one.
 
 | Round | Passed | False successes | What the traces showed | What changed afterwards |
@@ -724,7 +728,8 @@ Other flags: `--headed`, `--provider gemini|ollama`, `--sim-url`, `--scenarios-d
 | 2026-10-16 | 3 of 5 | 1 | `invoice_happy` saved a correct bill but ran out of its 40-step budget; `invoice_ambiguous_vendor` picked "Company X Ltd" without noticing "Company X Holdings" | Step budget 40 to 60; prompt rules on several matching entries, guessed logins and file re-reads |
 | 2026-10-17 | 0 of 5 | 2 | Three runs died on Gemini's `MALFORMED_FUNCTION_CALL` response, which the client treated as fatal and retried unchanged. The verifier passed two wrong results: it saw the competing Holdings invoice and passed anyway, and it never compared the mailbox with the portal | Malformed calls fail over to the next model, retry at a higher temperature, then reach the agent as a correction; two mandatory verifier checks, **Ambiguity** and **Completeness**, enforced by the verdict schema |
 | 2026-10-18 | 4 of 5 | 1 | `invoice_portal_missing`, `invoice_happy`, `invoice_duplicate` and `invoice_server_error` passed, most of them on the weakest model in the chain (`gemini-3.5-flash-lite`). `invoice_ambiguous_vendor` still entered Ltd's invoice without asking: the verifier listed both vendors but judged "no ambiguity" without looking up Holdings' invoices | The Ambiguity verdict is now decided by code: the verifier lists every matching entity and the candidate it found for each, and two or more candidates with no question asked is a failure (not yet re-measured) |
-| **2026-10-19** | **3 of 5** (1 not valid, see below) | 0 | `invoice_ambiguous_vendor` passed **twice in a row**: the agent asked which Company X was meant both times. `deny_write` passed. `month_backfill` (first real-model run) failed **with a wrong write**: it entered CX-2026-0401 with dates it never read (they match a different invoice's e-mail), and ran out of steps before the other two invoices. `reply_payment_date` was graded a false success, but the trace shows the browser was served stale simulator data from an earlier day while the checker graded against fresh data; the agent's reply matched what the system showed it, so this run is an environment fault and is not counted | Planned: a runtime check that every value typed into a form appears in an earlier observation or in working memory; the eval harness to grade from the simulator's actual data and to fail fast when a second simulator answers on the same port |
+| 2026-10-19 | 3 of 5 (1 not valid, see below) | 0 | `invoice_ambiguous_vendor` passed **twice in a row**: the agent asked which Company X was meant both times. `deny_write` passed. `month_backfill` (first real-model run) failed **with a wrong write**: it entered CX-2026-0401 with dates it never read (they match a different invoice's e-mail), and ran out of steps before the other two invoices. `reply_payment_date` was graded a false success, but the trace shows the browser was served stale simulator data from an earlier day while the checker graded against fresh data; the agent's reply matched what the system showed it, so this run is an environment fault and is not counted | A runtime value-provenance check before every write (section 5); the eval harness now checks it is talking to the right simulator instance and grades from the simulator's own rows (ENV ERROR on a mismatch) |
+| **2026-10-20** | **0 of 2** | 0 | Re-ran the two scenarios the fixes affect. A first attempt timed out on both because two free-tier models answered in 58 and 97 seconds per call, so it was re-run on the fast models only. `month_backfill` entered CX-2026-0401 **correctly** this time (no wrong write; the provenance check had nothing to block) but used up its 60-step budget before the other two invoices. `reply_payment_date` ended on the weakest model, searched the ERP for the invoice 40 times instead of opening the vendor portal, and ran out of steps without replying. The simulator identity check reported no environment errors | Not changed: these remaining failures are search efficiency on the weakest free-tier model, not wrong writes |
 
 The 2026-10-18 round in detail:
 
@@ -745,7 +750,7 @@ All scenarios are exercised by the unit tests with a scripted LLM, and the multi
 ## 12. Testing
 
 ```bash
-python -m pytest -q            # 676 tests
+python -m pytest -q            # 771 tests
 ```
 
 The count comes from `python -m pytest -q --co` (collect only). No API key and no network are needed: the model is replaced by a scripted fake (or the policy stand-in). The suite takes a few minutes because many tests start Chromium or PostgreSQL.
@@ -825,6 +830,7 @@ Settings come from environment variables or `.env` (names match [worker/config.p
 | | `HTTP_ALLOWED_HOSTS` | `localhost,127.0.0.1` | hosts `http_request` may call |
 | Agent | `APPROVAL_MODE` | `confirm_writes` | `auto`, `confirm_writes`, `confirm_all` (in multi-user mode the org's setting, with this as its default) |
 | | `MAX_STEPS`, `MAX_CONSECUTIVE_FAILURES`, `RUN_TIMEOUT_S` | 60, 4, 900 | guards (org settings override `MAX_STEPS` and `RUN_TIMEOUT_S`) |
+| | `PROVENANCE_CHECK` | on | block writes whose dates, amounts or IDs do not appear in anything the agent read (section 5) |
 | Database | `DATABASE_URL` | empty | PostgreSQL URL; empty means single-user mode. Managed-host URLs work as given (Neon's `sslmode=require&channel_binding=require` is translated); use the direct, not the `-pooler`, endpoint |
 | | `DB_POOL_SIZE`, `DB_MAX_OVERFLOW`, `DB_POOL_TIMEOUT_S` | 10, 10, 30 | connection pool per process |
 | Auth | `AUTH_MODE` | `auto` | `auto`, `file` (ignore the database for sign-in) or `db` |
@@ -996,7 +1002,7 @@ oneforall-agent/
 │   │                         files.py  http.py  secrets.py  memory_tools.py  interaction.py  control.py
 │   └── ui/                   index.html  app.js  admin.js  approvals.js  memory.js  styles.css (dashboard)
 ├── evals/                    scenarios/*.yaml, run.py (runner), checkers.py, scenarios.py, simstate.py, results/
-├── tests/                    676 tests (scripted LLM, local HTML fixtures, a throwaway PostgreSQL database)
+├── tests/                    771 tests (scripted LLM, local HTML fixtures, a throwaway PostgreSQL database)
 ├── workspace/                the agent's "shared drive": credentials.json, README.txt
 ├── docs/                     ARCHITECTURE.md  MULTI_USER.md  DEPLOY.md  SCALING.md  DEMO_SCRIPT.md  loadtest-results.md/.json
 └── runs/                     (generated) per-run screenshots, downloads, report.md; file-mode run logs

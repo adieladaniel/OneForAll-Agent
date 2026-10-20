@@ -797,6 +797,17 @@ class TypeTool(BrowserTool):
         tail = " and press Enter" if args.get("submit") else ""
         return f'Type "{shown}" into {self._element_desc(args, ctx)} on {self._page_path(ctx)}{tail}'
 
+    def submitted_values(self, args: dict, ctx: ToolContext) -> list[dict[str, str]]:
+        """With submit=true the typed text goes out with the form (the form's other fields are in the approval preview)."""
+        if not args.get("submit"):
+            return []
+        session = peek_session(ctx)
+        info = session.info(args.get("ref")) if session else None
+        if info and info.get("type") == "password":
+            return []
+        label = str((info or {}).get("name") or "") or "Typed text"
+        return [{"label": label, "value": str(args.get("text", ""))}]
+
     def refusal(self, args, session):
         if args.get("submit"):
             return "Typing with submit=true is not allowed in read-only mode."
