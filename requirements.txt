@@ -16,7 +16,7 @@ itsdangerous
 playwright
 pyyaml
 cryptography
-sqlalchemy[asyncio]>=2.0
+sqlalchemy[asyncio]>=2.1.5
 asyncpg
 alembic
 argon2-cffi
