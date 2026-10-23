@@ -15,7 +15,7 @@ queue_depth                        gauge {org}                     queued runs p
 queue_wait_seconds                 histogram                       queued_at -> claimed (first claims only)
 tool_calls_total                   counter {tool, ok}              tool executions
 tool_duration_seconds              histogram {tool}                tool execution time (retries included)
-llm_calls_total                    counter {model, outcome}        per attempt: ok, rate_limited, network, transient, malformed, error
+llm_calls_total                    counter {model, outcome}        per attempt: ok, rate_limited, network, timeout, transient, malformed, error
 llm_tokens_total                   counter {model, direction}      input / output tokens
 llm_latency_seconds                histogram {model}               time inside the provider call
 llm_ratelimit_wait_seconds         histogram                       time spent waiting for the rate limiter

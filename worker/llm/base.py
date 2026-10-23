@@ -90,6 +90,17 @@ class TransientLLMError(LLMError):
         self.network = network
 
 
+class LLMTimeoutError(TransientLLMError):
+    """The provider did not answer within ``LLM_CALL_TIMEOUT_S`` (an overloaded server holding the connection open).
+
+    Classified like a 503 (``unavailable=True``): a failover client retries once quickly and then moves on to the next
+    model for this call, marking the timed-out model temporarily unavailable (never quota-exhausted)."""
+
+    def __init__(self, message: str = "the model did not answer in time", timeout_s: float | None = None):
+        super().__init__(message, unavailable=True)
+        self.timeout_s = timeout_s
+
+
 class MalformedCallError(TransientLLMError):
     """The model answered with a broken function call (Gemini's ``MALFORMED_FUNCTION_CALL``).
 

@@ -91,8 +91,9 @@ def make_llm(
                                         rate_per_s=settings.llm_refill_per_s)
         else:  # file mode: the process-global health, unless this run uses a key of its own
             health = None if key == settings.GEMINI_API_KEY else _local_health.setdefault(key_hash, ModelHealth())
-        inner: LLMClient = FailoverLLM(model_chain(org_settings, settings), lambda model: GeminiClient(key, model),
-                                       health=health)
+        inner: LLMClient = FailoverLLM(
+            model_chain(org_settings, settings),
+            lambda model: GeminiClient(key, model, timeout_s=settings.LLM_CALL_TIMEOUT_S), health=health)
     elif provider == "ollama":
         from worker.llm.ollama import OllamaClient
 

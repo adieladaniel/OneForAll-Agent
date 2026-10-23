@@ -512,7 +512,7 @@ async def test_the_orgs_key_drives_the_client_the_limiter_and_the_health_but_the
     class FakeGemini:
         name = "gemini"
 
-        def __init__(self, api_key, model):
+        def __init__(self, api_key, model, timeout_s=0.0):
             built.append(api_key)
 
     monkeypatch.setattr("worker.llm.gemini.GeminiClient", FakeGemini)
@@ -585,7 +585,7 @@ def test_file_mode_make_llm_is_the_v1_wiring(monkeypatch):
     class FakeGemini:
         name = "gemini"
 
-        def __init__(self, api_key, model):
+        def __init__(self, api_key, model, timeout_s=0.0):
             built.append(api_key)
 
     monkeypatch.setattr("worker.llm.gemini.GeminiClient", FakeGemini)

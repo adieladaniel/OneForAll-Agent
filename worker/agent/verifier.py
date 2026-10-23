@@ -1,12 +1,14 @@
 """Independent verification: a fresh-context auditor re-observes the real system with read-only tools."""
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field, replace
 from datetime import date
 
+from worker.agent.interrupt import await_unless_set
 from worker.agent.prompts import (
     MALFORMED_CALL_NOTE,
     VERIFIER_MISSING_CHECKS,
@@ -210,8 +212,13 @@ def _briefing(
 class Verifier:
     """Runs a separate, short LLM conversation that audits a success claim with the read-only tool subset."""
 
-    def __init__(self, llm: LLMClient, registry: ToolRegistry, max_steps: int = DEFAULT_MAX_STEPS):
+    def __init__(
+        self, llm: LLMClient, registry: ToolRegistry, max_steps: int = DEFAULT_MAX_STEPS,
+        *, cancelled: asyncio.Event | None = None,
+    ):
+        """``cancelled``: when it is set, a model call in flight is abandoned and ``CallInterrupted`` is raised."""
         self._llm = llm
+        self._cancelled = cancelled
         self._tools = registry.subset(read_only=True)
         self._verdict_spec = SubmitVerdictTool().spec()
         self.max_steps = max_steps
@@ -256,7 +263,8 @@ class Verifier:
                 specs = [self._verdict_spec] if last_turn else self._tools.specs() + [self._verdict_spec]
                 outgoing = redactor.redact_messages(messages) if redactor else messages  # claim and facts come from the worker
                 try:
-                    response = await self._llm.complete(outgoing, specs, tool_choice="any" if last_turn else "auto")
+                    response = await await_unless_set(
+                        self._llm.complete(outgoing, specs, tool_choice="any" if last_turn else "auto"), self._cancelled)
                 except MalformedCallError as err:
                     malformed += 1
                     if malformed > MAX_MALFORMED_REPLIES:

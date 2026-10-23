@@ -25,6 +25,9 @@ class Settings(BaseSettings):
     LLM_MIN_INTERVAL_S: float = 4.0
     # How long to keep retrying the model through a network outage (DNS/connection errors) before giving up.
     LLM_NETWORK_RETRY_S: float = 300.0
+    # Longest a single model call may take (seconds, 0 = no limit). An overloaded server that holds the connection open
+    # counts as the model being unavailable: the next model of the chain answers instead (worker/llm/gemini.py).
+    LLM_CALL_TIMEOUT_S: float = 60.0
     # Shared limits (database mode, see worker/llm/limiter.py and health_pg.py): one token bucket per API key, shared by
     # every run of every process. Refill rate: LLM_REFILL_PER_S, else 1 / LLM_MIN_INTERVAL_S (0 = no rate limit).
     LLM_BUCKET_CAPACITY: float = 2.0   # burst: calls that may start back to back before the refill rate applies (>= 1)

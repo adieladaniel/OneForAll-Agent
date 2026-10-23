@@ -408,6 +408,10 @@ def create_app(
         try:
             return await org_chaos(tenant_id, app.state.settings, app.state.sim_http)
         except ProvisioningError as err:
+            if err.status == 404:  # the simulator is up but lost this org's tenant (its data dir was wiped)
+                raise HTTPException(status_code=409, detail=(
+                    "This organization's simulated company is missing from the simulator. An admin can recreate it in "
+                    "Admin > Simulated company > Provision environment, or restart with python run.py.")) from None
             raise HTTPException(status_code=502, detail=str(err)) from None
 
     @app.get("/api/environment/enter", include_in_schema=False)

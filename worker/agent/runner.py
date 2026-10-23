@@ -15,6 +15,7 @@ from worker import metrics
 from worker.agent.broker import InteractionBroker
 from worker.agent.context import build_messages, compress_step
 from worker.agent.guards import GuardEvent, Guards, counts_toward_budget
+from worker.agent.interrupt import CallInterrupted, await_unless_set
 from worker.agent.memory import WorkingMemory
 from worker.agent.policy import INTERNAL_TOOLS, ApprovalPolicy
 from worker.agent.prompts import (
@@ -206,7 +207,8 @@ class AgentRunner:
         await self._emit("llm_waiting", {**info, "message": message})
 
     def cancel(self) -> None:
-        """Ask the run to stop at the next safe point (also releases a pending approval/question)."""
+        """Ask the run to stop at the next safe point (also releases a pending approval/question and abandons a model
+        call in flight; a tool call that may be writing always finishes first)."""
         self._cancelled.set()
 
     # ------------------------------------------------------------------ lifecycle
@@ -280,7 +282,11 @@ class AgentRunner:
                 messages = self.redactor.redact_messages(messages)
             self._nudges = []
             try:
-                response = await self.llm.complete(messages, specs, tool_choice="any" if self._force_tool else "auto")
+                # A model call only reads, so a cancel request abandons it at once instead of waiting for the provider.
+                response = await await_unless_set(
+                    self.llm.complete(messages, specs, tool_choice="any" if self._force_tool else "auto"), self._cancelled)
+            except CallInterrupted as err:
+                raise _Stop("cancelled", "Cancelled by the user.") from err
             except QuotaExceededError as err:  # the org's own daily budget, not a provider problem: say so plainly
                 raise _Stop("needs_attention", str(err)) from err
             except MalformedCallError as err:  # the model's reply was unusable: a failed turn, not a dead model
@@ -541,11 +547,14 @@ class AgentRunner:
         self.state.status = "verifying"
         await self._checkpoint()
         await self._emit("verification_started", {"criteria": self.state.success_criteria})
-        verdict = await Verifier(self.llm, self.registry).verify(
-            task=self.state.task, criteria=self.state.success_criteria, claim=claim,
-            facts_text=self.memory.render(), ctx=self.ctx, on_step=self._record_verify_step,
-            questions=self._asked_questions(), sources=self._audit_sources(),
-        )
+        try:
+            verdict = await Verifier(self.llm, self.registry, cancelled=self._cancelled).verify(
+                task=self.state.task, criteria=self.state.success_criteria, claim=claim,
+                facts_text=self.memory.render(), ctx=self.ctx, on_step=self._record_verify_step,
+                questions=self._asked_questions(), sources=self._audit_sources(),
+            )
+        except CallInterrupted as err:  # cancelled while the auditor waited for its model
+            raise _Stop("cancelled", "Cancelled by the user.") from err
         self.state.usage["llm_calls"] += verdict.llm_calls
         self.state.usage["input_tokens"] += verdict.input_tokens
         self.state.usage["output_tokens"] += verdict.output_tokens

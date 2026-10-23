@@ -7,6 +7,8 @@ of calls, so waiting is useless: when a model reports a daily quota error the ru
 * daily quota (QuotaExhaustedError)  -> model is skipped until the next quota reset (midnight Pacific time);
 * 404 / persistent 503               -> model is skipped (until reset / for a short cooldown);
 * a single 503                       -> one quick retry on the same model first;
+* a call that times out (LLMTimeoutError, see LLM_CALL_TIMEOUT_S) is not retried: the model is marked temporarily
+  unavailable (never as out of quota) and the next model answers the call;
 * a malformed function call          -> the next model answers the same call; nothing is marked unusable;
 * connectivity errors (DNS, refused connection) never mark a model: they propagate untouched;
 * per-minute rate limits and other errors propagate to ResilientLLM (wait and retry the same model).
@@ -24,10 +26,12 @@ from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta, timezone
 from typing import Literal
 
+from worker import metrics
 from worker.llm.base import (
     LLMClient,
     LLMError,
     LLMResponse,
+    LLMTimeoutError,
     MalformedCallError,
     Message,
     ModelUnavailableError,
@@ -187,19 +191,31 @@ class FailoverLLM(LLMClient):
         raise self._nothing_usable()
 
     async def _attempt(self, client, model, messages, tools, temperature, tool_choice) -> LLMResponse:
-        """One call; a 503 gets a single quick retry and then counts as the model being unavailable."""
+        """One call; a 503 gets a single quick retry and then counts as the model being unavailable. A call that timed out
+        is not retried (it already cost the whole timeout): the model is unavailable at once."""
         try:
             return await client.complete(messages, tools, temperature=temperature, tool_choice=tool_choice)
         except TransientLLMError as err:
             if not err.unavailable or err.network:
                 raise
+            if isinstance(err, LLMTimeoutError):
+                self._note_timeout(model, err)
+                raise ModelUnavailableError(f"{model} did not answer in time: {err}", model=model, temporary=True) from err
             await self._sleep(self.quick_retry_s)
         try:
             return await client.complete(messages, tools, temperature=temperature, tool_choice=tool_choice)
         except TransientLLMError as err:
             if not err.unavailable or err.network:
                 raise
+            self._note_timeout(model, err)  # the retry itself may have hung
             raise ModelUnavailableError(f"{model} is overloaded: {err}", model=model, temporary=True) from err
+
+    @staticmethod
+    def _note_timeout(model: str, err: TransientLLMError) -> None:
+        """A timed-out attempt never reaches ResilientLLM (the next model answers instead), so it is counted here."""
+        if isinstance(err, LLMTimeoutError):
+            log.warning("model %s did not answer in time (%s)", model, err)
+            metrics.llm_call(model, "timeout", err.timeout_s)
 
     def _note_used(self, model: str) -> None:
         if self._used is not None and self._used != model:

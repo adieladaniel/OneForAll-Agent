@@ -115,6 +115,14 @@ def main() -> int:
         procs.append(("company_sim", sim))
         wait_healthy(f"{SIM_URL}/healthz", "company_sim", sim)
         print(f"[run] simulated company ready at {SIM_URL}  (mail, vendor portal, ERP)")
+        if database_mode():
+            # Each org has its own simulated company. Its data can be lost (a wiped data dir, a fresh checkout), so make
+            # sure every org's environment exists and its logins in the vault match, as deploy/start.py does.
+            print("[run] checking every organization's simulated company: python -m worker.provisioning resync")
+            synced = subprocess.run([sys.executable, "-m", "worker.provisioning", "resync"], cwd=ROOT, timeout=120)
+            if synced.returncode != 0:
+                print("[run] warning: resync failed; runs may use the default simulated company. "
+                      "Retry with: python -m worker.provisioning resync")
 
         worker = spawn("worker server", "worker.server")
         procs.append(("worker", worker))

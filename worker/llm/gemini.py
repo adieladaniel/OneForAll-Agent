@@ -10,6 +10,7 @@ function calls strictly), with Google's documented dummy signature so the histor
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import uuid
@@ -26,6 +27,7 @@ from worker.llm.base import (
     LLMClient,
     LLMError,
     LLMResponse,
+    LLMTimeoutError,
     MalformedCallError,
     Message,
     ModelUnavailableError,
@@ -49,6 +51,8 @@ _TOOL_CHOICE_MODES = {"auto": "AUTO", "any": "ANY", "none": "NONE"}
 DUMMY_THOUGHT_SIGNATURE = b"skip_thought_signature_validator"
 # A server retry hint longer than this means a daily quota, not a per-minute limit.
 DAILY_QUOTA_RETRY_S = 60.0
+# The SDK's own HTTP timeout is only a backstop for the asyncio limit in GeminiClient.complete: it must fire later.
+SDK_TIMEOUT_MARGIN_S = 10.0
 
 
 def requires_thought_signatures(model: str) -> bool:
@@ -336,7 +340,9 @@ def map_error(err: Exception, model: str = "") -> LLMError:
     * 404 NOT_FOUND -> ModelUnavailableError (switch model);
     * connectivity errors (DNS, refused/reset, connect timeout) -> TransientLLMError(network=True): retried on a
       time budget by ResilientLLM and never a reason to fail over;
-    * other 5xx / 408 / timeouts -> TransientLLMError.
+    * a call that took too long (our own limit or an HTTP read timeout) -> LLMTimeoutError, classified like a 503
+      (one quick retry, then switch model; never a quota problem);
+    * other 5xx / 408 -> TransientLLMError.
     """
     if isinstance(err, genai_errors.APIError):
         if err.code == 429 or err.status == "RESOURCE_EXHAUSTED":
@@ -359,7 +365,9 @@ def map_error(err: Exception, model: str = "") -> LLMError:
         return LLMError(f"Gemini API error {err.code}: {err.message}")
     if is_network_error(err):
         return TransientLLMError(f"Gemini network error: {err}", network=True)
-    if isinstance(err, (httpx.TransportError, TimeoutError, ConnectionError)):
+    if isinstance(err, (httpx.TimeoutException, TimeoutError)):
+        return LLMTimeoutError(f"Gemini did not answer in time: {err}")
+    if isinstance(err, (httpx.TransportError, ConnectionError)):
         return TransientLLMError(f"Gemini network error: {err}")
     return LLMError(f"Gemini call failed: {err}")
 
@@ -369,11 +377,18 @@ class GeminiClient(LLMClient):
 
     name = "gemini"
 
-    def __init__(self, api_key: str, model: str, *, include_thoughts: bool = True, client: Any = None):
+    def __init__(
+        self, api_key: str, model: str, *, include_thoughts: bool = True, client: Any = None, timeout_s: float = 0.0
+    ):
+        """``timeout_s``: longest one call may take (0 = no limit); a slower call raises ``LLMTimeoutError``."""
         if not api_key and client is None:
             raise LLMError("GEMINI_API_KEY is not set (get a free key at https://aistudio.google.com/apikey)")
         self.model = model
-        self._client = client or genai.Client(api_key=api_key)
+        self.timeout_s = max(0.0, timeout_s)
+        if client is None:
+            options = types.HttpOptions(timeout=int((self.timeout_s + SDK_TIMEOUT_MARGIN_S) * 1000)) if self.timeout_s else None
+            client = genai.Client(api_key=api_key, http_options=options)
+        self._client = client
         self._meta: dict[str, CallMeta] = {}
         self._include_thoughts = include_thoughts
         self._foreign_signature = DUMMY_THOUGHT_SIGNATURE if requires_thought_signatures(model) else None
@@ -401,8 +416,13 @@ class GeminiClient(LLMClient):
                 function_calling_config=types.FunctionCallingConfig(mode=_TOOL_CHOICE_MODES[tool_choice])
             )
         try:
-            resp = await self._generate(contents, config)
+            # An overloaded server may hold the connection open for minutes: the limit makes that a failover trigger.
+            async with asyncio.timeout(self.timeout_s or None) as limit:
+                resp = await self._generate(contents, config)
         except Exception as err:  # noqa: BLE001 - mapped to the LLMError hierarchy
+            if isinstance(err, TimeoutError) and limit.expired():
+                raise LLMTimeoutError(f"Gemini ({self.model}) did not answer within {self.timeout_s:g}s",
+                                      timeout_s=self.timeout_s) from err
             raise map_error(err, self.model) from err
         json_paths = {t.name: free_form_paths(t) for t in tools or []}
         return parse_response(resp, self._meta, json_paths)

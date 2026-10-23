@@ -38,7 +38,7 @@ It runs against a simulated company (mail inbox, vendor billing portal, internal
 
 <table>
   <tr>
-    <td align="center" width="25%"><img src="https://img.shields.io/badge/tests-771-4f46e5?style=for-the-badge" alt="tests: 771"><br><sub>automated tests, run with a scripted model and no API key</sub></td>
+    <td align="center" width="25%"><img src="https://img.shields.io/badge/tests-781-4f46e5?style=for-the-badge" alt="tests: 781"><br><sub>automated tests, run with a scripted model and no API key</sub></td>
     <td align="center" width="25%"><img src="https://img.shields.io/badge/soak%20runs-280%2F280-0f766e?style=for-the-badge" alt="soak runs: 280/280"><br><sub>succeeded and passed ground truth, through a worker kill and an API restart</sub></td>
     <td align="center" width="25%"><img src="https://img.shields.io/badge/isolation%20leaks-0-0f766e?style=for-the-badge" alt="isolation leaks: 0"><br><sub>across 47,508 responses in the soak (about 118,000 scanned in all profiles)</sub></td>
     <td align="center" width="25%"><img src="https://img.shields.io/badge/roles-5-4f46e5?style=for-the-badge" alt="roles: 5"><br><sub>viewer, approver, operator, admin, owner, with separation of duties</sub></td>
@@ -750,7 +750,7 @@ All scenarios are exercised by the unit tests with a scripted LLM, and the multi
 ## 12. Testing
 
 ```bash
-python -m pytest -q            # 771 tests
+python -m pytest -q            # 781 tests
 ```
 
 The count comes from `python -m pytest -q --co` (collect only). No API key and no network are needed: the model is replaced by a scripted fake (or the policy stand-in). The suite takes a few minutes because many tests start Chromium or PostgreSQL.
@@ -820,6 +820,7 @@ Settings come from environment variables or `.env` (names match [worker/config.p
 | | `LLM_BUCKET_CAPACITY`, `LLM_REFILL_PER_S` | 2, 0 | shared token bucket: burst size, calls per second (0 = derive from the interval) |
 | | `LLM_HEALTH_CACHE_S`, `LLM_QUOTA_CACHE_S` | 3, 5 | how often a process re-reads shared model health and the org's daily usage |
 | | `LLM_NETWORK_RETRY_S` | 300 | how long to keep retrying through a network outage |
+| | `LLM_CALL_TIMEOUT_S` | 60 | a model call that has not answered by then counts as the model being unavailable: the call moves to the next model at once (no retry on the slow one); 0 = no limit |
 | | `OLLAMA_MODEL`, `OLLAMA_URL` | `qwen2.5:3b`, `http://localhost:11434` | local fallback |
 | | `POLICY_THINK_MS` | 800 | simulated model latency of the policy LLM |
 | Environment | `SIM_BASE_URL` | `http://localhost:8001` | where the simulated company runs |
@@ -1002,7 +1003,7 @@ oneforall-agent/
 │   │                         files.py  http.py  secrets.py  memory_tools.py  interaction.py  control.py
 │   └── ui/                   index.html  app.js  admin.js  approvals.js  memory.js  styles.css (dashboard)
 ├── evals/                    scenarios/*.yaml, run.py (runner), checkers.py, scenarios.py, simstate.py, results/
-├── tests/                    771 tests (scripted LLM, local HTML fixtures, a throwaway PostgreSQL database)
+├── tests/                    781 tests (scripted LLM, local HTML fixtures, a throwaway PostgreSQL database)
 ├── workspace/                the agent's "shared drive": credentials.json, README.txt
 ├── docs/                     ARCHITECTURE.md  MULTI_USER.md  DEPLOY.md  SCALING.md  DEMO_SCRIPT.md  loadtest-results.md/.json
 └── runs/                     (generated) per-run screenshots, downloads, report.md; file-mode run logs
@@ -1064,6 +1065,7 @@ Admin endpoints (open unless `SIM_ADMIN_TOKEN` is set; localhost only): `GET/POS
 | `cannot decrypt credential ... wrong VAULT_KEY?` | The API and the workers must use the same `VAULT_KEY` (or the same `.vault/.vault_key` file). |
 | A run ends with "approval expired" | Nobody answered within the org's `approval_timeout_s` (default 1 hour). Start it again and answer from the Approvals page. |
 | HTTP 429 when starting a run, "daily limit", or a run stops with "Organization daily LLM budget reached" | The org's daily run, token or LLM-call budget is used up (UTC day; defaults 50 runs, 2,000,000 tokens, 500 calls). An admin can raise them under **Admin > Organization settings**. A 429 on sign-in means too many failed attempts: wait for the window (15 minutes) to end. |
+| A run shows no new steps for minutes, or Cancel seems slow | A free-tier model can hold a request without answering. Each call is limited by `LLM_CALL_TIMEOUT_S` (60 s); after that the next model in `GEMINI_MODELS` answers instead. Cancel interrupts a waiting model call at once (the worker sees it within a few seconds). Closing the terminal does not end a run: it goes back to the queue and resumes on the next start. |
 | Run stops with "language model could not be reached" or log shows 429 / `RESOURCE_EXHAUSTED` | Free-tier quota or rate limit. The client already backs off and honours retry hints; wait a minute, raise `LLM_MIN_INTERVAL_S` (for example `8`), or edit the `GEMINI_MODELS` chain. A model whose free-tier daily quota (about 20 requests per model per day) is used up is skipped automatically and the run continues on the next model; "All configured Gemini models are out of free-tier quota" means every model in the chain is used up for the day. |
 | `GEMINI_API_KEY is not set` / dashboard badge says no key | Create `.env` from `.env.example` and set the key; restart `python run.py`. |
 | `Chromium is not installed. Run: python -m playwright install chromium` | Run exactly that in the activated venv. On Linux also `python -m playwright install-deps chromium`. |

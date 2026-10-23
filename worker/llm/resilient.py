@@ -16,6 +16,7 @@ from worker.llm.base import (
     LLMClient,
     LLMError,
     LLMResponse,
+    LLMTimeoutError,
     MalformedCallError,
     Message,
     RateLimitError,
@@ -242,6 +243,7 @@ class ResilientLLM(LLMClient):
                 continue
             except (RateLimitError, TransientLLMError) as err:
                 metrics.llm_call(self._model_label(), "rate_limited" if isinstance(err, RateLimitError)
+                                 else "timeout" if isinstance(err, LLMTimeoutError)
                                  else "network" if err.network else "transient", self._clock() - attempt_started)
                 if isinstance(err, TransientLLMError) and err.network:
                     now = self._clock()
