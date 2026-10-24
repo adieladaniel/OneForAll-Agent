@@ -524,9 +524,15 @@ def tenant_harness(sim, tmp_path, monkeypatch):
         reg.register(FinishTool())
         return reg
 
-    def llm(_settings):
+    def llm(run_settings):
+        # The scenarios run concurrently, so record the prompt on this run's own entry (matched by its entry link), not
+        # on whichever run happened to build its registry last.
+        entry = run_settings.SIM_ENTRY_URL
+
         def responder(messages, tools):
-            seen[-1]["prompt"] = messages[1].content
+            for record in seen:
+                if record["entry"] == entry:
+                    record["prompt"] = messages[1].content
             call = ToolCall(id="c1", name="finish", args={"status": "blocked", "summary": "I was not allowed to create the bill."})
             return LLMResponse(text="", tool_calls=[call], usage=Usage(10, 5))
         return ScriptedLLM(responder)
