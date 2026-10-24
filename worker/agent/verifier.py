@@ -22,9 +22,9 @@ from worker.tools.base import Risk, Tool, ToolContext, ToolResult
 from worker.tools.registry import ToolRegistry
 from worker.tools.retry import execute_with_retry
 
-# Raised from 12: besides one check per criterion the auditor must now also look through the lists of matching entities
-# and the other sources (mailbox vs portal) for a competing candidate, which takes several reads on top of the record check.
-DEFAULT_MAX_STEPS = 16
+# Raised from 12 to 16, then to 24: besides one check per criterion the auditor must also look through the lists of matching
+# entities and the other sources (mailbox vs portal) for a competing candidate, and each sign-in alone costs 4-5 steps.
+DEFAULT_MAX_STEPS = 24
 OBSERVATION_LIMIT = 3000
 MAX_MALFORMED_REPLIES = 2  # consecutive broken auditor replies tolerated before the audit is called inconclusive
 
@@ -192,6 +192,17 @@ def ambiguity_check(raw: dict, asked: bool) -> tuple[dict, list[str]]:
                         f"which one was meant: {_describe_entities(competing)}. Auditor's note: {note}"), []
 
 
+def _evidence_text(claim: dict) -> str:
+    """The worker's evidence as one line per item (what it claims and where it saw it), so the auditor opens those first."""
+    lines = []
+    for item in claim.get("evidence") or []:
+        if isinstance(item, dict):
+            lines.append(f"- {item.get('claim', '')} (source: {item.get('source') or 'not stated'})")
+        else:
+            lines.append(f"- {item}")
+    return "\n".join(lines) or "(none stated: look for the result via the outputs and the task)"
+
+
 def _briefing(
     task: str, criteria: list[str], claim: dict, facts_text: str, questions: list[dict] | None = None,
     sources: str = "",
@@ -202,6 +213,7 @@ def _briefing(
         f"ORIGINAL TASK:\n{task}\n\n"
         "SUCCESS CRITERIA:\n" + ("\n".join(f"- {c}" for c in criteria) or "- (none stated: derive checks from the task)")
         + f"\n\nWORKER'S CLAIM (unverified):\n{json.dumps(claimed, indent=2, ensure_ascii=False, default=str)}"
+        + f"\n\nWHERE THE WORKER SAYS THE RESULT IS (open these first):\n{_evidence_text(claim)}"
         + f"\n\nWORKER'S WORKING-MEMORY FACTS (unverified):\n{facts_text}\n\n"
         f"QUESTIONS THE WORKER ASKED THE USER, AND THE ANSWERS:\n{_questions_text(questions or [])}\n\n"
         f"SYSTEMS AND SOURCES AVAILABLE TO YOU:\n{sources or '(not described: use list_credentials and the start page)'}\n\n"

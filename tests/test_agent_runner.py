@@ -867,6 +867,14 @@ async def test_the_workers_questions_and_answers_and_the_sources_reach_the_verif
     assert "SYSTEMS AND SOURCES AVAILABLE" in briefing and "start page" in briefing and "read_note" in briefing
 
 
+async def test_the_workers_evidence_sources_are_listed_for_the_verifier(registry, settings):
+    llm = make_llm(worker=[reply("Done.", finish_call())], auditor=[verdict(True)])
+    await Harness(llm, registry, settings).run()
+    briefing = auditor_calls(llm)[0]["messages"][1].content
+    assert "WHERE THE WORKER SAYS THE RESULT IS" in briefing
+    assert "- record saved (source: save_record result)" in briefing.split("WHERE THE WORKER SAYS THE RESULT IS")[1]
+
+
 async def test_the_verifier_is_told_when_the_worker_asked_nothing(registry, settings):
     llm = make_llm(worker=[reply("Done.", finish_call())], auditor=[verdict(True)])
     await Harness(llm, registry, settings).run()

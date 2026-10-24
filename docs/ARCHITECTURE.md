@@ -536,7 +536,7 @@ Goal: catch "the agent says it is done but the system disagrees".
 
 ## 14. Guards
 
-[guards.py](../worker/agent/guards.py), configured by `MAX_STEPS` (60), `MAX_CONSECUTIVE_FAILURES` (4) and `RUN_TIMEOUT_S` (900); in multi-user mode the organization's `max_steps` and `run_timeout_s` replace the first and the last.
+[guards.py](../worker/agent/guards.py), configured by `MAX_STEPS` (60), `MAX_CONSECUTIVE_FAILURES` (4) and `RUN_TIMEOUT_S` (1800); in multi-user mode the organization's `max_steps` and `run_timeout_s` replace the first and the last.
 
 | Guard | Trigger | Response |
 |---|---|---|

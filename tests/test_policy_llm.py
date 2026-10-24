@@ -27,6 +27,7 @@ from worker.config import Settings
 from worker.llm.base import Message, ToolCall
 from worker.llm.policy import (
     ERP_NOTE_KEY,
+    PLAN_ITEMS,
     PolicyLLM,
     is_verifier,
     parse_facts,
@@ -218,6 +219,62 @@ async def test_think_time_is_jittered_and_zero_means_none():
     assert time.monotonic() - started < 0.1
 
 
+PLAN_MARKS = {"pending": "[ ]", "in_progress": "[>]", "done": "[x]", "blocked": "[!]", "skipped": "[-]"}
+INVOICE_FACTS_TEXT = ("- vendor: Globex Corporation\n- invoice_number: GLX-88213\n- amount: 5681.96\n- currency: USD\n"
+                      "- issue_date: 2026-09-19\n- due_date: 2026-10-19")
+
+
+def bill_page(bill_id: int = 7, amount: str = "5,681.96 USD", banner: str = "") -> str:
+    return (f"URL: http://127.0.0.1:8610/erp/bills/{bill_id}\nTitle: Bill #{bill_id}\n--- Page text ---\n{banner}\n"
+            f"Vendor\nGlobex Corporation\nInvoice number\nGLX-88213\nAmount\n{amount}\nIssue date\n2026-09-19\nDue date\n2026-10-19\n"
+            "--- Interactive elements ---\n[1] link \"Bills\" -> /erp/bills\n")
+
+
+def plan_turn(statuses: list[str], facts: str, page: str) -> list[Message]:
+    plan = "\n".join(f"{PLAN_MARKS[st]} {i}. {text}" for i, (st, text) in enumerate(zip(statuses, PLAN_ITEMS), start=1))
+    state = f"=== CURRENT STATE (action 9 of at most 40) ===\n\nPlan:\n{plan}\n\nWorking memory:\n{facts}"
+    return user(LATEST_TASK, state) + [
+        Message(role="assistant", tool_calls=[ToolCall(id="n1", name="browser_click", args={"ref": 3})]),
+        Message(role="tool", tool_call_id="n1", name="browser_click", content=page + "\n\n" + state)]
+
+
+async def test_the_plan_is_updated_alongside_the_action_and_never_in_the_finish_turn():
+    # the first look at a created bill whose values agree: every item is done now, because finish comes next turn
+    statuses = ["done", "done", "done", "in_progress", "pending"]
+    first_look = await decide(plan_turn(statuses, INVOICE_FACTS_TEXT, bill_page(banner="Bill #7 created")))
+    assert [c.name for c in first_look.tool_calls] == ["update_plan", "remember", "remember", "remember", "browser_navigate"]
+    items = first_look.tool_calls[0].args["items"]
+    assert [i["text"] for i in items] == list(PLAN_ITEMS) and [i["status"] for i in items] == ["done"] * 5
+    # the next turn re-opens nothing new and finishes alone, with no plan call in it
+    facts = INVOICE_FACTS_TEXT + "\n- bill_id: 7\n- bill_status: created\n- pdf_check: ok"
+    last = await decide(plan_turn(["done"] * 5, facts, bill_page()))
+    assert [c.name for c in last.tool_calls] == ["finish"] and last.tool_calls[0].args["status"] == "success"
+    # a plan that already shows the derived statuses is not sent again
+    again = await decide(plan_turn(["done"] * 5, facts, bill_page().replace("/erp/bills/7", "/erp/bills")))
+    assert "update_plan" not in [c.name for c in again.tool_calls]
+
+
+async def test_the_plan_stays_honest_when_the_bill_does_not_match_or_already_existed():
+    statuses = ["done", "done", "done", "in_progress", "pending"]
+    wrong = await decide(plan_turn(statuses, INVOICE_FACTS_TEXT, bill_page(amount="5,000.00 USD", banner="Bill #7 created")))
+    assert [c.name for c in wrong.tool_calls][-1] == "browser_navigate"  # what it does is unchanged
+    items = wrong.tool_calls[0].args["items"]
+    assert [i["status"] for i in items] == ["done", "done", "done", "done", "blocked"]
+    assert "amount 5000.00 USD" in items[4]["note"]
+    # a bill that was already there: the save step is skipped (and says why), not "done"
+    listing = ("URL: http://127.0.0.1:8610/erp/bills?q=GLX-88213\nTitle: Bills\n--- Page text ---\n"
+               "#7[3] | Globex Corporation | GLX-88213 | 5,681.96 | USD | 2026-10-19 | open\n"
+               "--- Interactive elements ---\n[3] link \"#7\" -> /erp/bills/7\n")
+    existing = await decide(plan_turn(["done", "done", "in_progress", "pending", "pending"], INVOICE_FACTS_TEXT, listing))
+    assert [c.name for c in existing.tool_calls] == ["update_plan", "remember", "remember", "browser_click"]
+    items = existing.tool_calls[0].args["items"]
+    assert [i["status"] for i in items] == ["done", "done", "done", "skipped", "done"] and "Bill #7" in items[3]["note"]
+    # while the values are unconfirmed (nothing but the duplicate notice seen), the last item is only in progress
+    form = bill_page().replace("/erp/bills/7", "/erp/bills/new").replace("--- Interactive", "Bill #7 already exists (Bill #7)\n--- Interactive")
+    duplicate = await decide(plan_turn(["done", "done", "done", "in_progress", "pending"], INVOICE_FACTS_TEXT, form))
+    assert [i["status"] for i in duplicate.tool_calls[0].args["items"]] == ["done", "done", "done", "skipped", "in_progress"]
+
+
 def test_the_factory_builds_the_policy_provider_without_a_gemini_key():
     from worker.llm.factory import make_llm
 
@@ -327,6 +384,71 @@ async def test_full_run_enters_the_latest_invoice_and_passes_the_ground_truth_ch
     # every login went through the vault: the password is never in the transcript
     assert env.tenant.credentials["erp"]["password"] not in (tmp_path / "runs" / state.run_id / "run.json").read_text(encoding="utf-8")
     assert browser_pool.active_contexts == 0
+
+
+class TurnLog(PolicyLLM):
+    """A PolicyLLM that keeps the tool names of every worker turn."""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.turns: list[list[str]] = []
+
+    async def complete(self, messages, tools=None, **kwargs):
+        response = await super().complete(messages, tools, **kwargs)
+        if not is_verifier(messages):
+            self.turns.append([c.name for c in response.tool_calls])
+        return response
+
+
+def work_of(state) -> list[tuple[str, tuple[str, ...]]]:
+    """Every step the run took apart from plan bookkeeping: (tool, argument names). Each tenant of the sim has its own
+    invoice data, so values are not compared."""
+    return [(s.tool, tuple(sorted(s.args))) for s in state.steps if s.tool and s.tool != "update_plan"]
+
+
+async def test_the_plan_is_kept_current_and_shows_everything_done_when_the_run_ends(sim_url, browser_pool, tmp_path, monkeypatch):
+    from worker.llm import policy as policy_module
+
+    runs = {}
+    for label, tracking in (("tracked", True), ("untracked", False)):
+        with monkeypatch.context() as patch:
+            if not tracking:  # the stand-in as it was: the plan is sent on the first turn only
+                patch.setattr(policy_module, "_with_plan_update", lambda s, decision: decision)
+            env = Env(sim_url, f"pol-plan-{label}", [], tmp_path / label)
+            runner = env.runner(LATEST_TASK, browser_pool)
+            llm = runner.llm = TurnLog(think_ms=0)
+            state = await runner.run()
+            assert state.status == "succeeded", state.final_report
+            assert run_check("invoice_entry", state.to_dict(), env.sim_state()).passed
+            runs[label] = (state, llm)
+    (state, llm), (plain_state, plain_llm) = runs["tracked"], runs["untracked"]
+
+    # the dashboard's plan at the end: all five items done (it used to stay at 1 in progress, 4 pending)
+    assert [(p.text, p.status) for p in state.plan] == [(text, "done") for text in PLAN_ITEMS]
+    assert [p.status for p in plain_state.plan] == ["in_progress"] + ["pending"] * 4
+    # update_plan is bookkeeping: never in the finish turn, always first in its turn, and only when something changed (first turn, then portal read, ERP check, bill confirmed)
+    assert llm.turns[-1] == ["finish"] and sum(1 for t in llm.turns if "finish" in t) == 1
+    updates = [t for t in llm.turns if "update_plan" in t]
+    assert len(updates) == 4 and all(t[0] == "update_plan" and t.count("update_plan") == 1 for t in updates)
+    assert [t[1:] if t[0] == "update_plan" else t for t in llm.turns] == [t[1:] if t[:1] == ["update_plan"] else t for t in plain_llm.turns]
+    # the same actions in the same order, the same outcome
+    assert work_of(state) == work_of(plain_state)
+    assert state.final_report["outputs"].keys() == plain_state.final_report["outputs"].keys()
+    assert state.final_report["verification"]["passed"] and plain_state.final_report["verification"]["passed"]
+
+
+async def test_an_existing_bill_leaves_the_save_step_skipped_and_the_rest_done(sim_url, browser_pool, tmp_path):
+    env = Env(sim_url, "pol-plan-exists", [], tmp_path)
+    first = await env.runner(LATEST_TASK, browser_pool).run()
+    assert first.status == "succeeded", first.final_report
+    runner = env.runner(LATEST_TASK, browser_pool)
+    llm = runner.llm = TurnLog(think_ms=0)
+    state = await runner.run()
+
+    assert state.status == "succeeded" and state.facts["bill_status"].value == "exists"
+    assert [p.status for p in state.plan] == ["done", "done", "done", "skipped", "done"]
+    assert "already" in state.plan[3].note
+    assert llm.turns[-1] == ["finish"] and not any("update_plan" in t and "finish" in t for t in llm.turns)
 
 
 async def test_chaos_server_error_and_session_expiry_still_end_with_exactly_one_correct_bill(sim_url, browser_pool, tmp_path):

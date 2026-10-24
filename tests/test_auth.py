@@ -617,7 +617,7 @@ async def test_org_settings_are_validated_and_audited(world, db_app):
     current = (await admin.get("/api/admin/settings")).json()["settings"]
     assert {"approval_mode": "confirm_writes", "separation_of_duties": True, "sod_for_writes": False,
             "operators_can_approve": False, "approval_timeout_s": 3600, "max_runs_per_day": 50, "max_steps": 60,
-            "run_timeout_s": 900}.items() <= current.items()  # settings added by later milestones are checked in their own tests
+            "run_timeout_s": 1800}.items() <= current.items()  # settings added by later milestones are checked in their own tests
     assert (current["max_tokens_per_day"], current["max_llm_calls_per_day"], current["gemini_models"]) == (2_000_000, 500, [])
     ok = await admin.put("/api/admin/settings", json={"approval_mode": "confirm_all", "max_steps": 25, "operators_can_approve": True})
     assert ok.status_code == 200 and ok.json()["changed"] == ["approval_mode", "max_steps", "operators_can_approve"]

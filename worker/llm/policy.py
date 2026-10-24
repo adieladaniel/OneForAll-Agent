@@ -25,6 +25,11 @@ resume, an expired session) the auditor signs in with ``list_credentials`` + ``b
 one thing the read-only auditor may do) and opens the page again. As a fallback, if an audit still rejects the claim because
 it could not see the portal, the worker opens the source again once and finishes again.
 
+Like a real model it keeps its plan current: besides the plan it sends on the first turn, any turn after which the five
+checklist items' statuses (derived from the remembered facts, the page it is on and its own decision) differ from the plan
+the state block shows also carries an ``update_plan`` call. That call is bookkeeping only: it never changes the actions, and
+``finish`` still goes alone (the last item is marked done on the turn before it, once the bill's values were seen to agree).
+
 ``think_ms`` simulates model latency (jittered by +-40%), and token counts are estimated from the text (about 4 characters per
 token), so the shared rate limiter and the usage accounting see realistic traffic.
 """
@@ -47,6 +52,12 @@ CHARS_PER_TOKEN = 4
 MAX_SAVE_ATTEMPTS = 3
 STATE_MARKER = "=== CURRENT STATE"
 RESUME_MARKER = "Run resumed after an interruption"
+PLAN_ITEMS = ("Log in to the vendor portal and find the invoice",
+              "Read the amount, due date and issue date",
+              "Check the ERP for an existing bill",
+              "Enter the bill in the ERP and save it (needs approval)",
+              "Re-open the bill and confirm the values")
+INVOICE_FACTS = ("vendor", "invoice_number", "amount", "currency", "issue_date", "due_date")
 ERP_NOTE_KEY = "erp_new_bill_form"
 ERP_NOTE = ("The ERP new-bill form takes the vendor from a dropdown by name, the amount as a plain number with at most two "
             "decimals (no thousands separator) and both dates as YYYY-MM-DD; Save bill then shows a 'Bill created' notice.")
@@ -220,6 +231,26 @@ class Situation:
     last: list[CallResult]  # results of the previous turn's calls, in order
     has_plan: bool
     pdf_check: bool
+    plan: list[tuple[str, str]] = field(default_factory=list)  # (status, text) of the plan the state block shows
+
+
+_PLAN_STATUS_OF_MARK = {"[ ]": "pending", "[>]": "in_progress", "[x]": "done", "[!]": "blocked", "[-]": "skipped"}
+_PLAN_LINE = re.compile(r"^(\[.\]) \d+\. (.*?)(?:  -- .*)?$")
+
+
+def parse_plan(state_text: str) -> list[tuple[str, str]]:
+    """The plan checklist of the state block as ``(status, text)`` pairs (``[x] 2. Read ...  -- note``); empty when none."""
+    block = state_text.rsplit(STATE_MARKER, 1)[-1]
+    marker = block.find("Plan:\n")
+    if marker < 0:
+        return []
+    plan: list[tuple[str, str]] = []
+    for line in block[marker + len("Plan:\n"):].splitlines():
+        match = _PLAN_LINE.match(line)
+        if match is None or match.group(1) not in _PLAN_STATUS_OF_MARK:
+            break
+        plan.append((_PLAN_STATUS_OF_MARK[match.group(1)], match.group(2)))
+    return plan
 
 
 def _strip_state(content: str) -> str:
@@ -246,7 +277,7 @@ def read_situation(messages: list[Message], target: Target, *, pdf_check: bool) 
                 if page is not None:
                     break
     return Situation(target=target, facts=parse_facts(state_text), page=page, last=last,
-                     has_plan="Plan:\n(no plan yet)" not in state_text, pdf_check=pdf_check)
+                     has_plan="Plan:\n(no plan yet)" not in state_text, pdf_check=pdf_check, plan=parse_plan(state_text))
 
 
 @dataclass
@@ -294,6 +325,11 @@ def decide_worker(messages: list[Message], tool_names: set[str], *, pdf_check: b
     s = read_situation(messages, target, pdf_check=pdf_check and {"browser_download", "read_file"} <= tool_names)
     if not s.has_plan:
         return _first_turn(s)
+    return _with_plan_update(s, _next_action(s))
+
+
+def _next_action(s: Situation) -> Decision:
+    """The real next action(s), decided from the latest page and the remembered facts alone."""
     if any(r.name == "finish" and not r.ok for r in s.last):
         return _after_failed_audit(s)
     failed = next((r for r in s.last if not r.ok), None)
@@ -333,17 +369,85 @@ def _first_turn(s: Situation) -> Decision:
         "The bill's vendor, invoice number, amount and currency equal the vendor portal invoice.",
         "The bill's issue date and due date equal the vendor portal invoice.",
     ]
-    plan = [("Log in to the vendor portal and find the invoice", "in_progress"),
-            ("Read the amount, due date and issue date", "pending"),
-            ("Check the ERP for an existing bill", "pending"),
-            ("Enter the bill in the ERP and save it (needs approval)", "pending"),
-            ("Re-open the bill and confirm the values", "pending")]
+    plan = [(PLAN_ITEMS[0], "in_progress"), *((x, "pending") for x in PLAN_ITEMS[1:])]
     text = (f"Goal: record {what} as a bill in the ERP. I do not know the invoice details yet, so I check which "
             "credentials I may use and then open the vendor portal.")
     return Decision(text, [
         ("update_plan", {"goal_summary": f"Enter {what} into the ERP as an accounts-payable bill.",
                          "success_criteria": criteria, "items": [{"text": x, "status": st} for x, st in plan]}),
         ("list_credentials", {})])
+
+
+def _confirmation(page: Page | None, facts: dict[str, str]) -> list[str] | None:
+    """Has the stand-in seen the bill's values yet, and do they agree with the invoice? ``[]``: seen and equal; a list of
+    differences: seen and different; None: not seen. The bill page shows every value; the ERP list row shows the amount,
+    currency and due date."""
+    bill_id = facts.get("bill_id", "")
+    if page is None or not bill_id:
+        return None
+    if page.path == f"/erp/bills/{bill_id}":
+        fields = _bill_fields(page)
+        return _bill_problems(fields, facts) if all(fields.values()) else None
+    row = next((r for r in _erp_rows(page) if r["id"] == bill_id), None) if page.path == "/erp/bills" else None
+    if row is None:
+        return None
+    problems = []
+    if not same_amount(row["amount"], facts.get("amount", "")) or not same(row["currency"], facts.get("currency", "")):
+        problems.append(f"amount {row['amount']} {row['currency']}")
+    if not same(row["due"], facts.get("due_date", "")):
+        problems.append(f"due date {row['due']}")
+    return problems
+
+
+def derive_plan(s: Situation, decision: Decision) -> list[tuple[str, str, str]] | None:
+    """The plan's ``(text, status, note)`` items as the situation (plus the facts this turn's own ``remember`` calls add)
+    shows them: finished items ``done``, the first unfinished one ``in_progress``, the rest ``pending``. An item that was
+    done or skipped stays so (the plan never goes backwards). The bill step is ``skipped`` when a bill for the invoice
+    already existed, and the last step is ``blocked`` when the bill's values differ from the invoice. The last step is
+    ``done`` as soon as the bill's values have been seen and agree, which is the turn before ``finish``. None when the
+    plan shown is not the stand-in's own."""
+    if [text for _, text in s.plan] != list(PLAN_ITEMS):
+        return None
+    facts = {**s.facts, **{a["key"]: a["value"] for name, a in decision.calls if name == "remember"}}
+    page = s.page
+    path = page.path if page else ""
+    on_invoice = path.startswith("/portal/invoices/") and not (page and page.status and page.status >= 400)
+    opens_form = any(name == "browser_navigate" and urlparse(a.get("url", "")).path == "/erp/bills/new" for name, a in decision.calls)
+    bill_id, bill_status = facts.get("bill_id", ""), facts.get("bill_status", "")
+    exists = bill_status == "exists"
+    problems = _confirmation(page, facts)
+    satisfied = [bool(facts.get("invoice_number")) or on_invoice,
+                 all(facts.get(k) for k in INVOICE_FACTS),
+                 bool(bill_id) or path == "/erp/bills/new" or opens_form,
+                 bill_status in ("created", "exists"),
+                 problems == []]
+    items: list[tuple[str, str, str]] = []
+    current_seen = False
+    for i, text in enumerate(PLAN_ITEMS):
+        before = s.plan[i][0]
+        note = f"Bill #{bill_id} was already in the ERP; nothing was created." if i == 3 and exists else ""
+        if before in ("done", "skipped") or (satisfied[i] and not current_seen):
+            status = "skipped" if i == 3 and exists else "done"
+        elif not current_seen:
+            current_seen = True
+            status = "blocked" if i == 4 and problems else "in_progress"
+            note = f"The bill does not match the invoice: {', '.join(problems)}." if status == "blocked" else ""
+        else:
+            status = "pending"
+        items.append((text, status, note))
+    return items
+
+
+def _with_plan_update(s: Situation, decision: Decision) -> Decision:
+    """Add an ``update_plan`` call to this turn when the derived plan statuses differ from the plan the run shows. It goes
+    first (so a failing action cannot skip it), changes nothing else, and never joins a ``finish`` (which stays alone)."""
+    if any(name == "finish" for name, _ in decision.calls):
+        return decision
+    items = derive_plan(s, decision)
+    if items is None or [status for _, status, _ in items] == [status for status, _ in s.plan]:
+        return decision
+    plan = [{"text": text, "status": status, **({"note": note} if note else {})} for text, status, note in items]
+    return Decision(decision.text, [("update_plan", {"items": plan}), *decision.calls])
 
 
 def _after_failed_audit(s: Situation) -> Decision:
@@ -482,8 +586,7 @@ def _at_erp_list(s: Situation, page: Page) -> Decision:
 
 def _at_erp_form(s: Situation, page: Page) -> Decision:
     facts = s.facts
-    needed = ("vendor", "invoice_number", "amount", "currency", "issue_date", "due_date")
-    if not all(facts.get(k) for k in needed):
+    if not all(facts.get(k) for k in INVOICE_FACTS):
         return _goto(start_url(s), "I am missing the invoice details; reading them from the portal first.")
     text = page.text
     duplicate = re.search(r"already exists \(Bill #(\d+)\)", text)
@@ -525,24 +628,15 @@ def _at_erp_form(s: Situation, page: Page) -> Decision:
     return Decision(why, [_remember("save_attempts", str(attempts + 1), "ERP new-bill form"), ("browser_click", {"ref": save.ref})])
 
 
-def _at_erp_bill(s: Situation, page: Page) -> Decision:
-    facts = s.facts
-    if page.status and page.status >= 400:
-        return _finish("failed", "The ERP bill page could not be opened (not found).")
-    bill_id = page.path.rsplit("/", 1)[1]
-    fields = {"vendor": page.labelled("Vendor") or "", "invoice_number": page.labelled("Invoice number") or "",
-              "amount": plain_amount(page.labelled("Amount") or ""), "currency": (page.labelled("Amount") or "").partition(" ")[2],
-              "issue_date": page.labelled("Issue date") or "", "due_date": page.labelled("Due date") or ""}
-    if not all(fields.values()):
-        return Decision("The bill page did not show every field; re-reading it.", [("browser_read_page", {})])
-    source = f"ERP bill page {page.path}"
-    if facts.get("bill_id") != bill_id:  # first look at this bill
-        created = re.search(rf"Bill #{bill_id} created", page.text) is not None
-        calls = [_remember("bill_id", bill_id, source), _remember("bill_status", "created" if created else "exists", source)]
-        if created and ERP_NOTE_KEY not in facts:
-            calls.append(_remember(ERP_NOTE_KEY, ERP_NOTE, "learned while entering a bill in the ERP", scope="erp", durable=True))
-        return Decision(f"Bill #{bill_id} {'was created' if created else 'is shown'}; re-opening it to confirm what was stored.",
-                        [*calls, ("browser_navigate", {"url": f"/erp/bills/{bill_id}"})])
+def _bill_fields(page: Page) -> dict[str, str]:
+    """The labelled values of an ERP bill page (an empty string for a field the page does not show)."""
+    return {"vendor": page.labelled("Vendor") or "", "invoice_number": page.labelled("Invoice number") or "",
+            "amount": plain_amount(page.labelled("Amount") or ""), "currency": (page.labelled("Amount") or "").partition(" ")[2],
+            "issue_date": page.labelled("Issue date") or "", "due_date": page.labelled("Due date") or ""}
+
+
+def _bill_problems(fields: dict[str, str], facts: dict[str, str]) -> list[str]:
+    """What differs between a bill's values and the invoice facts remembered from the portal (empty = they agree)."""
     problems = []
     if not same(fields["invoice_number"], facts.get("invoice_number", "")):
         problems.append(f"invoice number {fields['invoice_number']}")
@@ -553,6 +647,26 @@ def _at_erp_bill(s: Situation, page: Page) -> Decision:
     for key, label in (("issue_date", "issue date"), ("due_date", "due date")):
         if not same(fields[key], facts.get(key, "")):
             problems.append(f"{label} {fields[key]}")
+    return problems
+
+
+def _at_erp_bill(s: Situation, page: Page) -> Decision:
+    facts = s.facts
+    if page.status and page.status >= 400:
+        return _finish("failed", "The ERP bill page could not be opened (not found).")
+    bill_id = page.path.rsplit("/", 1)[1]
+    fields = _bill_fields(page)
+    if not all(fields.values()):
+        return Decision("The bill page did not show every field; re-reading it.", [("browser_read_page", {})])
+    source = f"ERP bill page {page.path}"
+    if facts.get("bill_id") != bill_id:  # first look at this bill
+        created = re.search(rf"Bill #{bill_id} created", page.text) is not None
+        calls = [_remember("bill_id", bill_id, source), _remember("bill_status", "created" if created else "exists", source)]
+        if created and ERP_NOTE_KEY not in facts:
+            calls.append(_remember(ERP_NOTE_KEY, ERP_NOTE, "learned while entering a bill in the ERP", scope="erp", durable=True))
+        return Decision(f"Bill #{bill_id} {'was created' if created else 'is shown'}; re-opening it to confirm what was stored.",
+                        [*calls, ("browser_navigate", {"url": f"/erp/bills/{bill_id}"})])
+    problems = _bill_problems(fields, facts)
     if problems:
         return _finish("failed", f"Bill #{bill_id} does not match the invoice: {', '.join(problems)}. I did not change it.")
     created = facts.get("bill_status") == "created"

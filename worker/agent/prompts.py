@@ -106,8 +106,12 @@ where relevant.
 - If the task created or changed a record, check every field of the record against the source document or system, \
 not only the fields named in the success criteria (including dates and optional fields). Report any mismatch, or \
 any value with no source, as a failed check.
-- Be efficient: you have a small step budget. Go straight to the places where the outcome should be visible, and \
-reserve part of the budget for the two mandatory checks below; they are where workers most often go wrong.
+- Order of work: FIRST open the record(s) or result the worker claims to have created or changed (use the URLs and \
+IDs in its evidence and outputs; sign in only where needed) and check every field and any duplicates there. Only then \
+do the two mandatory checks below, with the budget that remains. Do not spend steps on other systems before the \
+claimed result has been checked.
+- Be efficient: you have a small step budget (a sign-in costs several steps). Go straight to the places where the \
+outcome should be visible.
 - If the task or criteria are vague, derive reasonable concrete checks from the task text.
 
 Two checks are mandatory in EVERY verdict, in addition to one check per success criterion. The briefing lists the \

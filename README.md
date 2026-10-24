@@ -32,13 +32,13 @@ It runs against a simulated company (mail inbox, vendor billing portal, internal
 
 **v1** was a single-user prototype. **v2** (this version) keeps all of that and adds what a team would need to run it: organizations with users and roles, PostgreSQL storage, a job queue with worker processes, durable approvals answered by a second person, an encrypted credential vault, governed organization memory, metrics and logs, and a load test that measures it. Both modes ship in the same code: with no database configured it works like v1 (one local user, files, one run at a time).
 
-<!-- Demo video: <add link> -->
+<p align="center"><a href="https://drive.google.com/file/d/1ln66XjTYH43Bc9gmmcMKInOBg1CcI21A/view?usp=sharing"><b>&#9654; Watch the demo video</b></a> <sub>(Google Drive)</sub></p>
 
 ## At a glance
 
 <table>
   <tr>
-    <td align="center" width="25%"><img src="https://img.shields.io/badge/tests-781-4f46e5?style=for-the-badge" alt="tests: 781"><br><sub>automated tests, run with a scripted model and no API key</sub></td>
+    <td align="center" width="25%"><img src="https://img.shields.io/badge/tests-786-4f46e5?style=for-the-badge" alt="tests: 786"><br><sub>automated tests, run with a scripted model and no API key</sub></td>
     <td align="center" width="25%"><img src="https://img.shields.io/badge/soak%20runs-280%2F280-0f766e?style=for-the-badge" alt="soak runs: 280/280"><br><sub>succeeded and passed ground truth, through a worker kill and an API restart</sub></td>
     <td align="center" width="25%"><img src="https://img.shields.io/badge/isolation%20leaks-0-0f766e?style=for-the-badge" alt="isolation leaks: 0"><br><sub>across 47,508 responses in the soak (about 118,000 scanned in all profiles)</sub></td>
     <td align="center" width="25%"><img src="https://img.shields.io/badge/roles-5-4f46e5?style=for-the-badge" alt="roles: 5"><br><sub>viewer, approver, operator, admin, owner, with separation of duties</sub></td>
@@ -651,7 +651,7 @@ The full metric table and the scrape configuration are in [docs/ARCHITECTURE.md]
 
 ## 9. Demo
 
-<!-- Demo video: <add link> -->
+**Demo video:** [watch on Google Drive](https://drive.google.com/file/d/1ln66XjTYH43Bc9gmmcMKInOBg1CcI21A/view?usp=sharing)
 
 The recording shows, in order (shot-by-shot script, with an optional multi-user segment, in **[docs/DEMO_SCRIPT.md](docs/DEMO_SCRIPT.md)**):
 
@@ -750,7 +750,7 @@ All scenarios are exercised by the unit tests with a scripted LLM, and the multi
 ## 12. Testing
 
 ```bash
-python -m pytest -q            # 781 tests
+python -m pytest -q            # 786 tests
 ```
 
 The count comes from `python -m pytest -q --co` (collect only). No API key and no network are needed: the model is replaced by a scripted fake (or the policy stand-in). The suite takes a few minutes because many tests start Chromium or PostgreSQL.
@@ -830,7 +830,7 @@ Settings come from environment variables or `.env` (names match [worker/config.p
 | | `BROWSER_MAX_CONTEXTS`, `BROWSER_ACQUIRE_TIMEOUT_S` | 8, 60 | open run contexts per process; wait for a free one |
 | | `HTTP_ALLOWED_HOSTS` | `localhost,127.0.0.1` | hosts `http_request` may call |
 | Agent | `APPROVAL_MODE` | `confirm_writes` | `auto`, `confirm_writes`, `confirm_all` (in multi-user mode the org's setting, with this as its default) |
-| | `MAX_STEPS`, `MAX_CONSECUTIVE_FAILURES`, `RUN_TIMEOUT_S` | 60, 4, 900 | guards (org settings override `MAX_STEPS` and `RUN_TIMEOUT_S`) |
+| | `MAX_STEPS`, `MAX_CONSECUTIVE_FAILURES`, `RUN_TIMEOUT_S` | 60, 4, 1800 | guards (org settings override `MAX_STEPS` and `RUN_TIMEOUT_S`) |
 | | `PROVENANCE_CHECK` | on | block writes whose dates, amounts or IDs do not appear in anything the agent read (section 5) |
 | Database | `DATABASE_URL` | empty | PostgreSQL URL; empty means single-user mode. Managed-host URLs work as given (Neon's `sslmode=require&channel_binding=require` is translated); use the direct, not the `-pooler`, endpoint |
 | | `DB_POOL_SIZE`, `DB_MAX_OVERFLOW`, `DB_POOL_TIMEOUT_S` | 10, 10, 30 | connection pool per process |
@@ -1003,7 +1003,7 @@ oneforall-agent/
 │   │                         files.py  http.py  secrets.py  memory_tools.py  interaction.py  control.py
 │   └── ui/                   index.html  app.js  admin.js  approvals.js  memory.js  styles.css (dashboard)
 ├── evals/                    scenarios/*.yaml, run.py (runner), checkers.py, scenarios.py, simstate.py, results/
-├── tests/                    781 tests (scripted LLM, local HTML fixtures, a throwaway PostgreSQL database)
+├── tests/                    786 tests (scripted LLM, local HTML fixtures, a throwaway PostgreSQL database)
 ├── workspace/                the agent's "shared drive": credentials.json, README.txt
 ├── docs/                     ARCHITECTURE.md  MULTI_USER.md  DEPLOY.md  SCALING.md  DEMO_SCRIPT.md  loadtest-results.md/.json
 └── runs/                     (generated) per-run screenshots, downloads, report.md; file-mode run logs
