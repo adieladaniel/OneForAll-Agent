@@ -32,7 +32,8 @@ It runs against a simulated company (mail inbox, vendor billing portal, internal
 
 **v1** was a single-user prototype. **v2** (this version) keeps all of that and adds what a team would need to run it: organizations with users and roles, PostgreSQL storage, a job queue with worker processes, durable approvals answered by a second person, an encrypted credential vault, governed organization memory, metrics and logs, and a load test that measures it. Both modes ship in the same code: with no database configured it works like v1 (one local user, files, one run at a time).
 
-<p align="center"><a href="https://drive.google.com/file/d/1ln66XjTYH43Bc9gmmcMKInOBg1CcI21A/view?usp=sharing"><b>&#9654; Watch the demo video</b></a> <sub>(Google Drive)</sub></p>
+<p align="center"><a href="https://drive.google.com/file/d/1ln66XjTYH43Bc9gmmcMKInOBg1CcI21A/view?usp=sharing"><b>&#9654; Watch the demo video</b></a> <sub>(Google Drive, open to everyone)</sub><br>
+<a href="https://oneforall-agent-prod-b5jfdqyyqa-el.a.run.app"><b>&#127760; Try the live app</b></a> <sub>(the app has its own sign-in; ask the author for a demo account)</sub></p>
 
 ## At a glance
 
@@ -135,7 +136,7 @@ sequenceDiagram
   <tr>
     <td valign="top">🔒 <b>Organization isolation</b><br>Another organization's run, file or approval answers 404, never 403, and the load test found no leak in about 118,000 scanned responses.</td>
     <td valign="top">📈 <b>Observability</b><br>A live timeline, structured logs, Prometheus <code>/metrics</code>, <code>/healthz</code> and <code>/readyz</code>, and an admin System card.</td>
-    <td valign="top">🚀 <b>CI/CD to Cloud Run</b><br>GitHub Actions lint, test on PostgreSQL 18 and build the image. A ready-to-use pipeline deploys to staging and production with a smoke-tested traffic switch and a rollback workflow (not running live; see section 1.6).</td>
+    <td valign="top">🚀 <b>CI/CD to Cloud Run</b><br>GitHub Actions lint, test on PostgreSQL 18 and build the image. A ready-to-use pipeline deploys to staging and production with a smoke-tested traffic switch and a rollback workflow (live on Cloud Run since 2026-10-24; see section 1.6).</td>
   </tr>
 </table>
 
@@ -310,6 +311,9 @@ OLLAMA_URL=http://localhost:11434
 The Ollama adapter uses `/api/chat` with native tool calling behind the same interface as Gemini. Expect much weaker reliability from small models; see [decision 3.12](#312-gemini-free-tier-behind-a-provider-adapter).
 
 ### 1.6 Optional: hosting it on Google Cloud Run
+
+> [!NOTE]
+> **Live deployment:** production at https://oneforall-agent-prod-b5jfdqyyqa-el.a.run.app and staging at https://oneforall-agent-staging-b5jfdqyyqa-el.a.run.app (Google Cloud Run, Neon PostgreSQL, deployed by the pipeline below). Sign-in is required; the demo accounts' passwords are generated per environment and kept in Secret Manager, so ask the author for access. The first request after a quiet period takes about a minute while the container starts.
 
 The `Dockerfile` builds one image with two shapes. Without a `DATABASE_URL` it is the single-user demo (simulated company plus API on one public port). With one it is the multi-user deployment: `deploy/start.py` (`ROLE=all`) starts the simulator, re-creates every organization's simulated company, starts the API and a job worker, and GitHub Actions deploys it to Cloud Run with a free Neon PostgreSQL, Secret Manager, a smoke-tested traffic switch and a rollback workflow. The full runbook, including the one-time setup script and the costs, is in [docs/DEPLOY.md](docs/DEPLOY.md).
 
@@ -881,7 +885,7 @@ Per-organization settings (approval mode and timeout, separation of duties, run 
 - **No SSO or OIDC, no MFA, no password change or reset, and no way to create an organization from the UI or API** (organizations come from the seed or SQL; admins add members to existing ones). Login throttling is per e-mail and per address (behind a proxy it needs `DEPLOY_MODE` so the forwarded address is used).
 - **The workspace folder is shared by all organizations** (section 4.6), and `python -m worker.vault` manages only the file vault.
 - **Scaling was measured on one machine** with a policy LLM, in one region, for minutes, not hours. A longer soak (the memory drift could be a leak or a plateau) and a real model run are still to do.
-- **The Cloud Run deployment is single-instance and its pipeline is untested against a real project.** `max-instances 1` because the simulated company lives inside the container; its SQLite data and the run artifacts are ephemeral, so every start creates fresh tenants (the start-up resync rewrites the vault) and a stopped instance resumes its runs from the last checkpoint on the next start. Bills and other data created inside the simulated company are lost on a restart (it stands in for external systems), but its logins are stable because `SIM_TENANT_SECRET` makes them deterministic. See [docs/DEPLOY.md](docs/DEPLOY.md). The workflows pass `actionlint` and the image was not built locally (no Docker here), so the first real deploy is the real test.
+- **The Cloud Run deployment is single-instance.** `max-instances 1` because the simulated company lives inside the container; its SQLite data and the run artifacts are ephemeral, so every start creates fresh tenants (the start-up resync rewrites the vault) and a stopped instance resumes its runs from the last checkpoint on the next start. Bills and other data created inside the simulated company are lost on a restart (it stands in for external systems), but its logins are stable because `SIM_TENANT_SECRET` makes them deterministic. See [docs/DEPLOY.md](docs/DEPLOY.md). The pipeline has deployed staging and production for real (2026-10-24); the first attempt found one Cloud Run quirk (Google's front end reserves `/healthz` on `run.app` URLs), so the smoke test uses `/api/health`.
 - **Dates are anchored to the real current date**, so seeded data shifts day to day (`SIM_TODAY` can pin it). The agent's own "today" comes from the host clock.
 - **Real-model eval table pending** (section 11).
 
@@ -892,7 +896,7 @@ Per-organization settings (approval mode and timeout, separation of duties, run 
 In priority order:
 
 1. **Rerun the real-Gemini evals** across all eight scenarios, in parallel across tenants within the free quota, and publish the table.
-2. **Prove the deployment.** The pipeline to Cloud Run exists (section 12.2); run it against a real project, then an hour-long soak there, and recycle a worker's Chromium after N contexts if the memory drift turns out to be real. After that, split the API and the workers into separate services with shared storage for the simulator and the artifacts, so the service can scale past one instance.
+2. **Harden the deployment.** The pipeline to Cloud Run is live (section 12.2); next is an hour-long soak there, and recycle a worker's Chromium after N contexts if the memory drift turns out to be real. After that, split the API and the workers into separate services with shared storage for the simulator and the artifacts, so the service can scale past one instance.
 3. **Object storage for artifacts** behind the `RunStore` seam (`artifact_dir` / `artifact_file`), served by signed URL, so resumed runs and any API copy see every file.
 4. **Database-enforced fencing.** A claim token checked in the SQL of every run write, replacing the in-process fence.
 5. **Identity.** OIDC single sign-on, MFA, password change and reset, session listing.
