@@ -171,7 +171,9 @@ jobs:
             sleep 5
           done
           echo "/readyz 200"
-          for path in /healthz /; do
+          # Not /healthz: Google's front end reserves that path on run.app URLs and answers 404 itself, so it never reaches
+          # the app. /api/health is the same liveness check.
+          for path in /api/health /; do
             code=$(status "$path")
             echo "${path} ${code}"
             if [ "$code" != "200" ]; then

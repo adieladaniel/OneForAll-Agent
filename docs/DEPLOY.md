@@ -156,7 +156,7 @@ forks and failed runs). It can also be started by hand (Actions > Deploy > Run w
       and the tag `sha-<first 7 of the commit>`, so it has its own URL. (The very first deploy of a service has nothing to
       protect and `--no-traffic` is not allowed for a service that does not exist, so that revision takes traffic at once.)
    4. **Smoke test** on the revision's own URL: `/readyz` (retried for up to 3 minutes, because the first request starts
-      the container: simulator, environment resync, API, worker), then `/healthz` and `/` (the dashboard and sign-in page).
+      the container: simulator, environment resync, API, worker), then `/api/health` and `/` (the dashboard and sign-in page). It does not use `/healthz`: Google's front end reserves that path on `run.app` URLs and answers 404 without reaching the container.
    5. **Switch traffic**: only after the smoke test passes, `update-traffic --to-latest` sends 100% to the new revision.
       If the smoke test fails, traffic stays on the previous revision and the job fails with the previous revision name and
       the commands to inspect it.
@@ -276,5 +276,5 @@ gcloud run services logs read oneforall-agent-prod --region asia-south1 --limit 
 gcloud run revisions list --service oneforall-agent-prod --region asia-south1
 ```
 
-Health endpoints (no sign-in): `/healthz` (the process answers), `/readyz` (database, migrations, simulator), and `/metrics`
+Health endpoints (no sign-in): `/healthz` (the process answers; on Cloud Run use `/api/health` instead, because Google reserves `/healthz` on `run.app` URLs), `/readyz` (database, migrations, simulator), and `/metrics`
 with `Authorization: Bearer <metrics-token>`.
